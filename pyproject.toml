@@ -1,0 +1,30 @@
+[project]
+name = "cknot"
+version = "0.1.0"
+description = "Agentic workflow orchestration with LangGraph"
+authors = [
+    { name = "Zegang Luo", email = "zegang.luo@qq.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "langchain>=0.3.0",
+    "langchain-openai>=0.2.0",
+    "langgraph>=0.2.0",
+    "langgraph-checkpoint-redis>=0.2.0",
+    "redis>=5.0.0",
+    "pydantic>=2.0",
+    "python-dotenv>=1.0.0",
+    "fastapi>=0.110.0",
+    "uvicorn>=0.27.0",
+    "python-multipart>=0.0.9",
+    "PyJWT>=2.8.0",
+    "bcrypt>=5.0.0",
+    "rich>=13.7.0",
+    "prompt-toolkit>=3.0.52",
+    "langchain-community>=0.4.2",
+    "wikipedia>=1.4.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
