@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.security import OAuth2PasswordRequestForm
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import logging
 from typing import Optional, List, Any, Annotated
 from contextlib import asynccontextmanager
@@ -11,6 +11,7 @@ from cknot.schemas.llm_service import LLMService
 from cknot.utils.redis_client import get_redis_client, get_async_redis_client
 from cknot.api.tools_api import router as tools_router
 from cknot.api.llms_api import router as llms_router
+from cknot.api.agents_api import router as agents_router
 from cknot.api.users_api import router as users_router
 from cknot.api.auth import get_current_user, get_user_key, create_access_token
 from cknot.utils.user_manager import UserManager
@@ -32,7 +33,22 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown logic can be added here if needed
 
-app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
+app = FastAPI(
+    title=settings.PROJECT_NAME,
+    description="""
+    ## CKnot Agentic Orchestration API
+    
+    The CKnot API allows you to interact with a hierarchical multi-agent system designed for system debugging and general assistance.
+    
+    ### Key Features:
+    * **Multi-Agent Orchestration**: Dynamic task delegation via the Boss Agent.
+    * **Infrastructure Management**: CRUD operations for LLM providers and System Tools.
+    * **Persistence**: Redis-backed session isolation and checkpointing.
+    * **Security**: OAuth2 with JWT and role-based access control.
+    """,
+    version="0.0.1-alpha",
+    lifespan=lifespan,
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -43,11 +59,20 @@ app.add_middleware(
 )
 
 class Token(BaseModel):
-    access_token: str
-    token_type: str
+    access_token: str = Field(..., description="The JWT access token.")
+    token_type: str = Field(..., description="The type of token (typically 'bearer').")
 
-@app.post("/token", response_model=Token)
+@app.post(
+    "/token", 
+    response_model=Token, 
+    tags=["auth"], 
+    summary="Obtain OAuth2 Access Token"
+)
 async def login(form_data: Annotated[OAuth2PasswordRequestForm, Depends()]):
+    """
+    Authenticates a user and returns a JWT access token.
+    This token must be used in the 'Authorization: Bearer <token>' header for protected endpoints.
+    """
     mgr = UserManager(get_async_redis_client())
     user_data = await mgr.aauthenticate(form_data.username, form_data.password)
     
@@ -66,9 +91,9 @@ async def login(form_data: Annotated[OAuth2PasswordRequestForm, Depends()]):
 # using the thread_id provided in the config.
 orchestrator = create_graph()
 
-# Include the tools management router
+# Include the agents management router
 app.include_router(
-    tools_router, 
+    agents_router,
     dependencies=[Depends(get_current_user)]
 )
 
@@ -78,22 +103,33 @@ app.include_router(
     dependencies=[Depends(get_current_user)]
 )
 
+# Include the tools management router
+app.include_router(
+    tools_router,
+    dependencies=[Depends(get_current_user)]
+)
+
 # Include the users management router
 app.include_router(users_router)
 
 class ChatRequest(BaseModel):
-    message: str
-    session_id: str
-    user_id: str
-    current_task: Optional[str] = "general_assistance"
+    message: str = Field(..., description="The user's input message to the agent.")
+    session_id: str = Field(..., description="Unique thread ID for state isolation and persistence.")
+    user_id: str = Field(..., description="The unique identifier for the user.")
+    current_task: Optional[str] = Field("general_assistance", description="Optional hint for LLM capability selection.")
 
 class ChatResponse(BaseModel):
-    content: str
-    session_id: str
-    requires_action: bool
-    next_node: Optional[str]
+    content: str = Field(..., description="The response text from the agentic graph.")
+    session_id: str = Field(..., description="The session ID associated with this turn.")
+    requires_action: bool = Field(..., description="Indicates if the workflow is paused awaiting human approval.")
+    next_node: Optional[str] = Field(None, description="The name of the next node (specialist or tool) if approval is required.")
 
-@app.post("/chat", response_model=ChatResponse)
+@app.post(
+    "/chat", 
+    response_model=ChatResponse, 
+    tags=["orchestration"], 
+    summary="Interact with the Agentic Graph"
+)
 async def chat(payload: ChatRequest, current_user: Annotated[str, Depends(get_current_user)]):
     """
     Main entry point for the agent. Handles state isolation via session_id.
@@ -138,7 +174,12 @@ async def chat(payload: ChatRequest, current_user: Annotated[str, Depends(get_cu
         logger.error(f"Error in chat for session {payload.session_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/approve/{session_id}", response_model=ChatResponse)
+@app.post(
+    "/approve/{session_id}", 
+    response_model=ChatResponse, 
+    tags=["orchestration"], 
+    summary="Approve Interrupted Workflow"
+)
 async def approve(session_id: str, current_user: Annotated[str, Depends(get_current_user)]):
     """
     Resumes the workflow for a session that is currently interrupted.

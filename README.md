@@ -117,5 +117,20 @@ You > /llms
 -   **State Isolation**: Conversations are isolated via `session_id`, ensuring multi-tenant safety.
 -   **Health Checks**: The system performs pre-flight checks on Redis and LLM providers to ensure service availability before starting workflows.
 
+## API Tests
+1. Access the UI: Start your API server (./bootstrap.sh start) and navigate to http://localhost:9999/docs in your browser.
+
+2. Authorize: Click the Authorize button at the top right. Use the /token endpoint credentials to unlock protected endpoints (indicated by the lock icon).
+
+3. Test Orchestration:
+   - Use the POST /chat endpoint to send a message like "Search for latest AI news".
+   - If the response returns requires_action: true and next_node: "deep_search", use the POST /approve/{session_id} endpoint to authorize the specialist to run.
+
+4. Audit Infrastructure: Expand the llms, tools, and users sections to review current system configurations, check token usage, or manage user profiles.
+
+![Swagger UI APIs](./docs/images/swaggeruiapis.png)
+![Agents List API](./docs/images/agentslistapi.png)
+
 ---
 *Developed with passion for robust agentic orchestration.*
+---
