@@ -1,10 +1,12 @@
 import logging
 from functools import wraps
-from typing import List, Optional, Dict, Any, Callable, Union
+from typing import List, Optional, Dict, Union
 from redis import Redis
 from redis.asyncio import Redis as AsyncRedis
 from cknot.schemas.tool_config import ToolConfig
 from langchain_core.tools import BaseTool
+
+from cknot.utils.redis_client import get_redis_client
 
 logger = logging.getLogger(__name__)
 
@@ -14,14 +16,14 @@ class ToolManager:
     """
     _instances: dict[str, 'ToolManager'] = {}
 
-    def __new__(cls, redis_client: Union[Redis, AsyncRedis]):
+    def __new__(cls, redis_client: Union[Redis, AsyncRedis] = get_redis_client()):
         # Maintain separate singletons for sync and async clients to avoid IO conflicts
         client_type = "async" if isinstance(redis_client, AsyncRedis) else "sync"
         if client_type not in cls._instances:
             cls._instances[client_type] = super(ToolManager, cls).__new__(cls)
         return cls._instances[client_type]
 
-    def __init__(self, redis_client: Union[Redis, AsyncRedis]):
+    def __init__(self, redis_client: Union[Redis, AsyncRedis] = get_redis_client()):
         if getattr(self, "_initialized", False):
             return
         self._redis = redis_client

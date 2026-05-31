@@ -90,7 +90,7 @@ def setup_logging(log_dir: str = "logs", log_level: int = logging.DEBUG):
     # Root Logger setup
     root_logger = logging.getLogger()
     root_logger.setLevel(min(log_level, logging.INFO))
-    root_logger.addHandler(console_handler)
+    # root_logger.addHandler(console_handler)
     root_logger.addHandler(file_handler)
 
     # Silence Noisy Third-Party Libraries

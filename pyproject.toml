@@ -23,6 +23,8 @@ dependencies = [
     "prompt-toolkit>=3.0.52",
     "langchain-community>=0.4.2",
     "wikipedia>=1.4.0",
+    "duckduckgo-search>=8.1.1",
+    "ddgs>=9.14.4",
 ]
 
 [build-system]

@@ -3,7 +3,7 @@
     "id": "default-llm",
     "name": "local-ollama",
     "provider": "ollama",
-    "model": "my-qwen-3.6:latest",
+    "model_name": "my-qwen-3.6:latest",
     "base_url": "http://host.docker.internal:11434/v1",
     "enabled": true
   },
@@ -11,7 +11,7 @@
     "id": "local-vllm",
     "name": "local-vllm",
     "provider": "vllm",
-    "model": "Qwen/Qwen3-0.6B",
+    "model_name": "Qwen/Qwen3-0.6B",
     "base_url": "http://localhost:8000/v1",
     "enabled": true
   }

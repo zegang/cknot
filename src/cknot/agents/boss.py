@@ -2,6 +2,7 @@ import logging
 import time
 import uuid
 from typing import List, Optional, Union, Dict, Any
+from pydantic import Field
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import SystemMessage, BaseMessage
 from langgraph.graph.state import RunnableConfig
@@ -10,6 +11,7 @@ from cknot.agents.system_prompts import CKNOT_BOSS_PROMPT
 from cknot.schemas.llm_service import LLMService, LLMSelectPolicy
 from cknot.agents.registry import AgentRegistry
 from cknot.agents.base import CKnotBaseAgent
+from cknot.utils.llm_manager import LLMManager
 
 logger = logging.getLogger(__name__)
 
@@ -18,20 +20,8 @@ class CKnotBossAgent(CKnotBaseAgent):
     The central orchestrator (Boss Agent) that routes tasks.
     Utilizes astream for real-time output capabilities.
     """
-    def __init__(
-        self, 
-        tools: Optional[List] = None,
-        llm_services: Optional[List[LLMService]] = None,
-        llm_select_policy: Union[LLMSelectPolicy, str] = LLMSelectPolicy.FIRST,
-        sub_agents: Optional[List[CKnotBaseAgent]] = None
-    ):
-        super().__init__(
-            system_prompt=CKNOT_BOSS_PROMPT, 
-            tools=tools, 
-            llm_services=llm_services,
-            llm_select_policy=llm_select_policy
-        )
-        self.sub_agents = sub_agents or []
+    system_prompt: str = Field(default=CKNOT_BOSS_PROMPT)
+    sub_agents: List[CKnotBaseAgent] = Field(default_factory=list)
 
     def _get_messages(self, state: AgentState) -> List[BaseMessage]:
         """Overrides base to inject specialist capabilities into the Boss prompt."""
@@ -60,20 +50,17 @@ class CKnotBossAgent(CKnotBaseAgent):
     async def ainvoke(
         self,
         state: AgentState,
-        llm: Optional[BaseChatModel] = None,
-        service_id: Optional[str] = None
+        config: RunnableConfig
     )-> Dict[str, Any]:
         """
         Asynchronous invocation for non-streaming responses.
         """
-        return await super().ainvoke(state, llm=llm, service_id=service_id)
+        return await super().ainvoke(state, config)
 
     async def astream(
         self, 
         state: AgentState,
-        config: RunnableConfig,
-        llm: Optional[BaseChatModel] = None, 
-        service_id: Optional[str] = None
+        config: RunnableConfig
     ):
         """
         Streams agent responses as chunks.
@@ -81,18 +68,24 @@ class CKnotBossAgent(CKnotBaseAgent):
         """
         start_time = time.perf_counter()
 
-        active_llm = self._select_llm_service(state, service_id) or llm
+        active_llm = self._select_llm_service(state)
         if not active_llm:
-            raise ValueError(f"No LLM provided or service_id '{service_id}' not found in registry.")
+            raise ValueError(
+                f"The Boss Orchestrator has no enabled LLM services. "
+                "Please use '/llms' to enable a service or check your configuration."
+            )
 
-        llm_with_tools = active_llm.bind_tools(self.tools) if self.tools else active_llm
+        llm_manager = LLMManager()
+        llm_svc_client = llm_manager.get_llm_service_client(active_llm.id)
+
+        llm_svc_clinet_with_tools = llm_svc_client.bind_tools(self.tools) if self.tools else llm_svc_client
         messages = self._get_messages(state)
         final_chunk = None
 
         # Generate a stable ID for this turn to ensure chunks merge correctly in LangGraph
         turn_id = str(uuid.uuid4())
 
-        async for chunk in llm_with_tools.astream(messages):
+        async for chunk in llm_svc_clinet_with_tools.astream(messages):
             chunk.id = turn_id
             # Accumulate chunks to compute final usage metadata
             if final_chunk is None:

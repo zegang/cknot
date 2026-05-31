@@ -1,8 +1,8 @@
 import logging
 import time
 from typing import Optional, List, Union, Dict, Any
+from pydantic import Field
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_core.language_models import BaseChatModel
 from langgraph.graph.state import RunnableConfig
 from cknot.schemas.state import AgentState
 from cknot.tools.file_ops import read_log_file
@@ -15,20 +15,11 @@ logger = logging.getLogger(__name__)
 
 class LogParserAgent(CKnotBaseAgent):
     """Agent responsible for reading log files and identifying issues."""
-    def __init__(
-        self, 
-        llm_services: Optional[List[LLMService]] = None,
-        llm_select_policy: Union[LLMSelectPolicy, str] = LLMSelectPolicy.FIRST
-    ):
-        super().__init__(
-            system_prompt=LOG_PARSER_PROMPT, 
-            llm_services=llm_services,
-            llm_select_policy=llm_select_policy,
-            good_at=["log analysis", "root cause identification", "DevOps debugging", "container logs"],
-            poor_at=["writing code", "web search", "user interaction"]
-        )
+    system_prompt: str = Field(default=LOG_PARSER_PROMPT)
+    good_at: List[str] = Field(default_factory=lambda: ["log analysis", "root cause identification", "DevOps debugging", "container logs"])
+    poor_at: List[str] = Field(default_factory=lambda: ["writing code", "web search", "user interaction"])
 
-    async def ainvoke(self, state: AgentState, llm: Optional[BaseChatModel] = None, service_id: Optional[str] = None) -> Dict[str, Any]:
+    async def ainvoke(self, state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
         """Asynchronous execution for the log parser."""
         file_path = state.get("logs_file_path")
         if not file_path:
@@ -37,7 +28,13 @@ class LogParserAgent(CKnotBaseAgent):
         logs = read_log_file.invoke(file_path)
         start_time = time.perf_counter()
         
-        active_llm = self._select_llm_service(state, service_id) or llm
+        active_llm = self._select_llm_service(state)
+        if not active_llm:
+            raise ValueError(
+                "The Log Parser agent has no enabled LLM services. "
+                "Use '/llms' to check status."
+            )
+
         messages = [
             SystemMessage(content=self.system_prompt),
             HumanMessage(content=f"Logs from {file_path}:\n\n{logs}")

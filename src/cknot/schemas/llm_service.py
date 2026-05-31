@@ -28,7 +28,7 @@ class LLMService(BaseModel):
     id: str = Field(..., description="Unique identifier for this LLM service (e.g., 'default_vllm', 'openai_gpt4').")
     name: str = Field(..., description="Human-readable name for the LLM service.")
     provider: LLMProvider = Field(..., description="The LLM provider (e.g., 'openai', 'anthropic', 'vllm').")
-    model: str = Field(..., description="The specific model name (e.g., 'gpt-4o', 'vicuna-7b-v1.5').")
+    model_name: str = Field(..., description="The specific model name (e.g., 'gpt-4o', 'vicuna-7b-v1.5').")
     api_key: Optional[str] = Field(None, description="API key for the LLM service. Will be redacted in logs.")
     base_url: Optional[HttpUrl] = Field(None, description="Base URL for custom API endpoints (e.g., vLLM).")
     is_enabled: bool = Field(True, description="Whether this LLM service is enabled.")

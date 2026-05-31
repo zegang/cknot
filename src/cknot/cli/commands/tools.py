@@ -4,7 +4,6 @@ from rich.rule import Rule
 from rich.panel import Panel
 from rich.prompt import Confirm
 from cknot.tools.tool_manager import ToolManager
-from cknot.utils.redis_client import get_redis_client
 from .base import COMMAND_REGISTRY
 from langgraph.graph.state import CompiledStateGraph
 
@@ -18,7 +17,7 @@ async def handle_tools(app: CompiledStateGraph, config, console, args):
 @handle_tools.subcommand("list", is_default=True)
 async def handle_tools_list(app: CompiledStateGraph, config, console, args):
     """Lists all registered tools and their status."""
-    mgr = ToolManager(get_redis_client())
+    mgr = ToolManager()
     tools = mgr.list_tool_configs()
     
     if not tools:
@@ -45,7 +44,7 @@ async def handle_tools_enable(app: CompiledStateGraph, config, console, args):
         console.print("[red]Usage: /tools enable <tool_id>[/red]")
         return
     
-    mgr = ToolManager(get_redis_client())
+    mgr = ToolManager()
     cfg = mgr.get_tool_config(args[0])
     if cfg:
         cfg.is_enabled = True
@@ -61,7 +60,7 @@ async def handle_tools_disable(app: CompiledStateGraph, config, console, args):
         console.print("[red]Usage: /tools disable <tool_id>[/red]")
         return
     
-    mgr = ToolManager(get_redis_client())
+    mgr = ToolManager()
     cfg = mgr.get_tool_config(args[0])
     if cfg:
         cfg.is_enabled = False
@@ -78,7 +77,7 @@ async def handle_tools_rm(app: CompiledStateGraph, config, console, args):
         return
     
     if Confirm.ask(f"[bold red]Delete tool config for '{args[0]}'? This only removes metadata, not the code.[/bold red]"):
-        mgr = ToolManager(get_redis_client())
+        mgr = ToolManager()
         mgr.delete_tool_config(args[0])
         console.print(f"[bold green]✔ Tool configuration for '{args[0]}' removed from Redis.[/bold green]")
 

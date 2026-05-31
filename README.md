@@ -56,32 +56,6 @@ cknot Interactive CLI (Session: cli_session_1779982985)
 Type /exit or /quit to end the session.
 
 ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-You > search for the latest advancements and breakthroughs in AI technology today
-───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-I will initiate a deep search to find the most recent news and technical breakthroughs in the field of Artificial          
-Intelligence.                                                                                                              
-
-TRIGGER_DEEP_SEARCH: latest advancements and breakthroughs in AI technology 2023 2024                                      
-╭──────────────────────────────────────────────────── Action Required ────────────────────────────────────────────────────╮
-│ The agent is requesting to execute: ('deep_search',)                                                                    │
-╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-Authorize execution? (yes/no): yes
-╭──────────────────────────────────────────────────── Action Required ────────────────────────────────────────────────────╮
-│ The agent is requesting to execute: ('tools',)                                                                          │
-╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-Authorize execution? (yes/no): yes
-The previous search did not yield relevant news results regarding AI advancements. I will re-run the search with more      
-specific queries to find recent breakthroughs and developments.                                                            
-
-TRIGGER_DEEP_SEARCH: AI news developments today, new large language models released in 2024, latest breakthrough in        
-artificial intelligence May 2024                                                                                           
-╭──────────────────────────────────────────────────── Action Required ────────────────────────────────────────────────────╮
-│ The agent is requesting to execute: ('tools',)                                                                          │
-╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-Authorize execution? (yes/no): no 
-
-✘ Execution denied. Returning to chat loop.
-───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 You > /agents
 ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 ───────────────────────────────────────────────── Active Agents in Graph ──────────────────────────────────────────────────
@@ -110,6 +84,96 @@ You > /llms
              load    Loads LLM services from a JSON or YAML file.
              enable  Enables an LLM service.   
 ```
+
+```
+cknot Interactive CLI (Session: cli_session_1780237934)
+Type /exit or /quit to end the session.
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+You > /agents info DeepSearchAgent
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+╭──────────────────────────────────────────────── Agent: DeepSearchAgent ─────────────────────────────────────────────────╮
+│ Name: DeepSearchAgent                                                                                                   │
+│ Good at: deep internet research, web searching, latest news, public data                                                │
+│ Poor at: local file access, private database analysis, code execution                                                   │
+│ Policy: first                                                                                                           │
+│ LLMs: None                                                                                                              │
+│ Tools: web_search                                                                                                       │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+You > /agents llm set DeepSearchAgent default-llm
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+✔ Assigned default-llm to DeepSearchAgent
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+You > search for the latest advancements and breakthroughs in AI technology today
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+I am delegating this request to the DeepSearchAgent, as it specializes in retrieving the latest news and conducting deep   
+internet research.                                                                                                         
+
+TRIGGER_DEEP_SEARCH                                                                                                        
+╭──────────────────────────────────────────────────── Action Required ────────────────────────────────────────────────────╮
+│ The agent is requesting to execute: deep_search                                                                         │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+Authorize execution? (yes/no): yes
+╭──────────────────────────────────────────────────── Action Required ────────────────────────────────────────────────────╮
+│ The agent is requesting to execute: tools:                                                                              │
+│   • web_search({'query': 'latest AI breakthroughs and advancements 2025'})                                              │
+│   • web_search({'query': 'new AI models and frameworks released 2024 2025'})                                            │
+│   • web_search({'query': 'AI industry trends and major news today'})                                                    │
+│   • web_search({'query': 'breakthroughs in artificial intelligence research 2025'})                                     │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+Authorize execution? (yes/no): yes
+Based on the latest research publications, industry reports, and major model releases (late 2025–2026 timeframe), AI       
+technology is undergoing a rapid pivot from passive generative systems toward highly autonomous, efficient, and vertically 
+integrated architectures. Here are the most significant breakthroughs and advancements:                                    
+
+🔹 Next-Generation Foundation Models                                                                                       
+
+ • GPT-5 & The New Reasoning Tier: The GPT-5 launch series has shifted the baseline for chain-of-thought reasoning,        
+   enabling models to tackle open-ended, multi-constraint problems with significantly fewer hallucinations.                
+ • Google's Gemini 3 / Gemma 3 Ecosystem: Google has introduced tighter integration across reasoning, vision, and audio    
+   modalities. Their open-weight Gemma 3 family has accelerated academic and commercial experimentation.                   
+ • GLM-5 / GLM-5.1 Advancements: Chinese model architectures have posted leading benchmark scores (~92.7% on AIME 2025     
+   mathematical reasoning), with GLM-5.1 specifically refined for production-grade code generation and software engineering
+   workflows.                                                                                                              
+
+🤖 Agentic AI & Autonomous Workflows                                                                                       
+
+ • AI has transitioned from content generation to task execution. Modern frameworks now support long-horizon planning,     
+   persistent memory, and secure tool-use APIs, allowing models to autonomously navigate software environments, run        
+   scientific simulations, or manage enterprise pipelines.                                                                 
+ • Multi-Agent Orchestration: Systems are being deployed where specialized agents (coder, researcher, validator, deployer) 
+   collaborate in real-time, dramatically reducing human-in-the-loop latency.                                              
+
+⚡ Hardware, Efficiency & Architecture                                                                                     
+
+ • Neuromorphic & Quantum-Inspired Computing: Breakthrough silicon architectures are mimicking biological neural pathways, 
+   cutting inference costs and latency for specialized workloads. Hybrid quantum-classical algorithms are also emerging for
+   optimization and molecular modeling.                                                                                    
+ • Sovereign & Edge AI: On-device/server hybrid models (e.g., Apple Intelligence, Apple Silicon optimizations, regional AI 
+   clouds) prioritize privacy, compliance, and real-time responsiveness without sacrificing capability.                    
+
+🔬 Scientific & Cross-Domain Integration                                                                                   
+
+ • Autonomous Scientists: AI now designs experiments, interprets peer-reviewed literature, and suggests novel materials or 
+   drug compounds, compressing R&D cycles in biotech, chemistry, and aerospace.                                            
+ • Stanford AI Index 2025 Tracking: The report highlights exponential growth in AI patents, academic publications, and     
+   compute scaling, alongside rapid corporate integration into finance, healthcare, logistics, and defense infrastructure. 
+
+🌍 Strategic & Governance Developments                                                                                     
+
+ • Major bilateral AI coalitions (e.g., US-Japan, EU-US tech pacts) are standardizing interoperability and safety          
+   benchmarks.                                                                                                             
+ • Regulatory frameworks are shifting from reactive oversight to proactive guardrails, focusing on watermarking, model     
+   transparency, and automated audit trails.                                                                               
+
+These advancements collectively signal maturity in reasoning depth, operational autonomy, and hardware efficiency. If you  
+need a deep dive into a specific vector (e.g., agentic AI architecture, neuromorphic chip progress, regulatory compliance, 
+or enterprise deployment strategies), let me know and I'll pull the targeted technical breakdown.                          
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+You > 
+```
+![Web Search](./docs/images/websearch2026-05-31%2022-51-36.png)
 
 ## 🛡 Security & Reliability
 

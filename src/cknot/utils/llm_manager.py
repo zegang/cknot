@@ -37,14 +37,14 @@ class LLMManager:
     """
     _instances: dict[str, 'LLMManager'] = {}
 
-    def __new__(cls, redis_client: Union[Redis, AsyncRedis]):
+    def __new__(cls, redis_client: Union[Redis, AsyncRedis] = get_redis_client()):
         # Maintain separate singletons for sync and async clients to avoid IO conflicts
         client_type = "async" if isinstance(redis_client, AsyncRedis) else "sync"
         if client_type not in cls._instances:
             cls._instances[client_type] = super(LLMManager, cls).__new__(cls)
         return cls._instances[client_type]
 
-    def __init__(self, redis_client: Union[Redis, AsyncRedis]):
+    def __init__(self, redis_client: Union[Redis, AsyncRedis] = get_redis_client()):
         if getattr(self, "_initialized", False):
             return
         self._redis = redis_client
@@ -125,7 +125,7 @@ class LLMManager:
             tracker = TokenUsageTracker(service)
 
             service._svc_client = ChatOpenAI(
-                model=service.model,
+                model=service.model_name,
                 api_key=service.api_key,
                 base_url=str(service.base_url) if service.base_url else None,
                 callbacks=[tracker] # Attach the usage tracker

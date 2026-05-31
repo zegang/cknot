@@ -186,11 +186,28 @@ async def _run_interactive_turn(user_input: str, session_id: str, config: dict, 
                 # Note: Continuing a stream after an exception is complex; 
                 # usually, we treat the interrupt as a desire to stop.
                 console.print("[yellow]Resuming... (Current step might be lost)[/yellow]")
+        except Exception as e:
+            console.print(f"\n[bold red]✘ Execution Error:[/bold red] {e}")
+            logger.error(f"An error occurred during the agent turn: {e}", exc_info=True)
+            return
 
         snapshot = await app.aget_state(config)
         if snapshot.next:
+            next_node = snapshot.next[0]
+            execution_info = f"[bold yellow]{next_node}[/bold yellow]"
+
+            # If we are about to enter the tools node, extract the tool calls from the state
+            if next_node == "tools":
+                messages = snapshot.values.get("messages", [])
+                last_msg = messages[-1] if messages else None
+                if last_msg and hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
+                    tool_details = []
+                    for tc in last_msg.tool_calls:
+                        tool_details.append(f"\n  • [cyan]{tc['name']}[/cyan]([italic]{tc['args']}[/italic])")
+                    execution_info = f"tools: {''.join(tool_details)}"
+
             console.print(Panel(
-                f"The agent is requesting to execute: [bold yellow]{snapshot.next}[/bold yellow]",
+                f"The agent is requesting to execute: {execution_info}",
                 title="[bold yellow]Action Required[/bold yellow]",
                 border_style="yellow"
             ))

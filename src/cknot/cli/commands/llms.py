@@ -5,7 +5,6 @@ from rich.rule import Rule
 from rich.panel import Panel
 from rich.prompt import Prompt, Confirm
 from cknot.utils.llm_manager import LLMManager
-from cknot.utils.redis_client import get_redis_client
 from cknot.schemas.llm_service import LLMService, LLMProvider
 from .base import COMMAND_REGISTRY
 from langgraph.graph.state import CompiledStateGraph
@@ -20,7 +19,7 @@ async def handle_llms(app: CompiledStateGraph, config, console, args):
 @handle_llms.subcommand("list", is_default=True)
 async def handle_llms_list(app: CompiledStateGraph, config, console, args):
     """Lists all registered LLM services and their health status."""
-    mgr = LLMManager(get_redis_client())
+    mgr = LLMManager()
     services = mgr.list_llm_services()
     
     table = Table(title="Registered LLM Services", border_style="cyan", header_style="bold cyan")
@@ -35,7 +34,7 @@ async def handle_llms_list(app: CompiledStateGraph, config, console, args):
         status = "[bold green]ENABLED[/bold green]" if s.is_enabled else "[bold red]DISABLED[/bold red]"
         valid = "[bold green]✔[/bold green]" if s.is_valid else "[bold red]✘[/bold red]"
         usage = f"{s.total_input_tokens} / {s.total_output_tokens}"
-        table.add_row(s.id, s.provider.value, s.model, status, valid, usage)
+        table.add_row(s.id, s.provider.value, s.model_name, status, valid, usage)
 
     console.print(table)
 
@@ -58,7 +57,7 @@ async def handle_llms_add(app: CompiledStateGraph, config, console, args):
         base_url=base_url if base_url else None
     )
     
-    mgr = LLMManager(get_redis_client())
+    mgr = LLMManager()
     mgr.register_llm_service(svc)
     console.print(f"[bold green]✔ LLM Service '{service_id}' registered.[/bold green]")
 
@@ -70,7 +69,7 @@ async def handle_llms_rm(app: CompiledStateGraph, config, console, args):
         return
     
     if Confirm.ask(f"[bold red]Delete LLM service '{args[0]}'? This cannot be undone.[/bold red]"):
-        mgr = LLMManager(get_redis_client())
+        mgr = LLMManager()
         mgr.delete_llm_service(args[0])
         console.print(f"[bold green]✔ Service '{args[0]}' removed.[/bold green]")
 
@@ -81,7 +80,7 @@ async def handle_llms_test(app: CompiledStateGraph, config, console, args):
         console.print("[red]Usage: /llms test <service_id>[/red]")
         return
         
-    mgr = LLMManager(get_redis_client())
+    mgr = LLMManager()
     with console.status(f"[bold cyan]Testing connection to {args[0]}..."):
         is_valid = await mgr.validate_service(args[0])
     
@@ -98,7 +97,7 @@ async def handle_llms_load(app: CompiledStateGraph, config, console, args):
         console.print(f"[bold red]Error: File {path} not found.[/bold red]")
         return
 
-    mgr = LLMManager(get_redis_client())
+    mgr = LLMManager()
     mgr.load_services_from_file(path)
     console.print(f"[bold green]✔ Loaded LLM configurations from {path}[/bold green]")
 
@@ -106,7 +105,7 @@ async def handle_llms_load(app: CompiledStateGraph, config, console, args):
 async def handle_llms_enable(app: CompiledStateGraph, config, console, args):
     """Enables an LLM service."""
     if not args: return
-    mgr = LLMManager(get_redis_client())
+    mgr = LLMManager()
     svc = mgr.get_llm_service(args[0])
     if svc:
         svc.is_enabled = True
