@@ -1,9 +1,11 @@
 import os
 import logging
+from typing import Dict, List, Any, Optional
 from redis.asyncio import Redis as AsyncRedis
 from cknot.agents.boss import CKnotBossAgent
 from cknot.agents.code_fixer import CodeFixerAgent
 from cknot.agents.deep_search import DeepSearchAgent
+from cknot.agents.article_writer import ArticleWriterAgent
 from cknot.agents.log_parser import LogParserAgent
 from cknot.utils.llm_manager import LLMManager
 from langgraph.graph import StateGraph, END
@@ -12,7 +14,7 @@ from cknot.config.config import settings
 from cknot.tools.tool_manager import ToolManager
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.redis import AsyncRedisSaver
-from cknot.schemas.state import AgentState, CKnotConfig
+from cknot.schemas.state import CknotAgentState, CKnotConfig
 from cknot.tools.web_search import web_search
 from cknot.tools.file_ops import read_log_file
 from cknot.tools.log_analysis import LogSearchTool # Assuming this is still a function-based tool
@@ -25,61 +27,55 @@ from langchain_community.utilities import WikipediaAPIWrapper
 
 logger = logging.getLogger(__name__)
 
-def create_graph() -> CompiledStateGraph:
-    # 1. Initialize LLM with Tools
-    llm_manager = LLMManager()
-    tool_manager = ToolManager()
+class GraphOrchestrator:
+    """
+    Handles the construction and compilation of the LangGraph workflow.
+    """
+    def __init__(self):
+        self.llm_manager = LLMManager()
+        self.tool_manager = ToolManager()
+        self.agents: Dict[str, Any] = {}
+        self.tools: List[Any] = []
 
-    # 2. Register Tools with the Manager
-    tool_manager.register_tool_instance("web_search", web_search)
-    tool_manager.register_tool_instance("read_log_file", read_log_file)
-    tool_manager.register_tool_instance("wikipedia", WikipediaQueryRun(api_wrapper=WikipediaAPIWrapper()))
-    tool_manager.register_tool_instance("log_search", LogSearchTool())
+    def _setup_tools(self):
+        """Registers and retrieves all system tools."""
+        self.tool_manager.register_tool_instance("web_search", web_search)
+        self.tool_manager.register_tool_instance("read_log_file", read_log_file)
+        self.tool_manager.register_tool_instance("wikipedia", WikipediaQueryRun(api_wrapper=WikipediaAPIWrapper()))
+        self.tool_manager.register_tool_instance("log_search", LogSearchTool())
+        self.tools = self.tool_manager.get_runnable_tools()
 
-    # Retrieve only enabled tools for the graph
-    tools = tool_manager.get_runnable_tools()
-    def_llm_svc = llm_manager.get_llm_service(settings.DEFAULT_LLM_SERVICE)
+    def _setup_agents(self):
+        """Initializes agents and registers them with the AgentRegistry."""
+        def_llm_svc = self.llm_manager.get_llm_service(settings.DEFAULT_LLM_SERVICE)
 
-    # Instantiate Class-based Agents
-    deep_search_agent = DeepSearchAgent()
-    log_parser_agent = LogParserAgent()
-    code_fixer_agent = CodeFixerAgent()
-    boss_agent = CKnotBossAgent(name="cknot", llm_services=[def_llm_svc], tools=tools, 
-                               sub_agents=[deep_search_agent, log_parser_agent, code_fixer_agent])
-    AgentRegistry.register_agent(deep_search_agent)
-    AgentRegistry.register_agent(log_parser_agent)
-    AgentRegistry.register_agent(code_fixer_agent)
-    AgentRegistry.register_agent(boss_agent)
+        deep_search = DeepSearchAgent()
+        log_parser = LogParserAgent()
+        code_fixer = CodeFixerAgent()
+        article_writer = ArticleWriterAgent(tools=self.tools)
+        boss = CKnotBossAgent(
+            name="cknot", 
+            llm_services=[def_llm_svc], 
+            tools=self.tools, 
+            sub_agents=[deep_search, log_parser, code_fixer, article_writer]
+        )
 
-    # 3. Build the Graph
-    workflow = StateGraph(AgentState, config_schema=CKnotConfig)
+        self.agents = {
+            "cknot": boss,
+            "deep_search": deep_search,
+            "log_parser": log_parser,
+            "code_fixer": code_fixer,
+            "article_writer": article_writer
+        }
 
-    # Define node functions that await the agent's ainvoke method
-    async def cknot_node(state: AgentState, config: RunnableConfig):
-        return await boss_agent.ainvoke(state, config)
+        for agent in self.agents.values():
+            AgentRegistry.register_agent(agent)
 
-    async def log_parser_node(state: AgentState, config: RunnableConfig):
-        return await log_parser_agent.ainvoke(state, config)
-
-    async def code_fixer_node(state: AgentState, config: RunnableConfig):
-        return await code_fixer_agent.ainvoke(state, config)
-
-    async def deep_search_node(state: AgentState, config: RunnableConfig):
-        return await deep_search_agent.ainvoke(state, config)
-
-    workflow.add_node("cknot", cknot_node)
-    workflow.add_node("log_parser", log_parser_node)
-    workflow.add_node("code_fixer", code_fixer_node)
-    workflow.add_node("deep_search", deep_search_node)
-    workflow.add_node("tools", ToolNode(tools))
-
-    # Define Edges
-    workflow.set_entry_point("cknot")
-    
-    def should_continue(state: AgentState):
-        """Router logic for the cknot boss."""
-        # Retrieve the last AI message to avoid issues with trailing tool or metadata fragments
-        last_message = next((m for m in reversed(state["messages"]) if isinstance(m, AIMessage)), state["messages"][-1])
+    @staticmethod
+    def _boss_router(state: CknotAgentState):
+        """Routing logic for the central orchestrator."""
+        # Specifically look for the last message from the orchestrator (cknot)
+        last_message = state["messages"][-1]
         
         logger.debug(f'Agent Graph Node CKnot Routing Check: {last_message}')
         if getattr(last_message, "tool_calls", None):
@@ -90,34 +86,66 @@ def create_graph() -> CompiledStateGraph:
             return "log_parser"
         if "TRIGGER_DEEP_SEARCH" in content:
             return "deep_search"
+        if "TRIGGER_ARTICLE_WRITING" in content:
+            return "article_writer"
         return END
 
-    workflow.add_conditional_edges("cknot", should_continue)
-    workflow.add_edge("tools", "cknot")
-
-    # Debugging Workflow: Parser -> Fixer
-    workflow.add_edge("log_parser", "code_fixer")
-    workflow.add_edge("code_fixer", END)
-    
-    # Deep Search Workflow
-    def should_continue_search(state: AgentState):
-        # Retrieve the last AI message to check for tool calls
+    @staticmethod
+    def _search_router(state: CknotAgentState):
+        """Routing logic for the deep search specialist."""
         last_message = next((m for m in reversed(state["messages"]) if isinstance(m, AIMessage)), state["messages"][-1])
         logger.debug(f'Agent Graph Node DeepSearch: {last_message}')
         return "tools" if getattr(last_message, "tool_calls", None) else "cknot"
 
-    workflow.add_conditional_edges("deep_search", should_continue_search)
+    def build(self) -> CompiledStateGraph:
+        """Assembles and compiles the graph."""
+        self._setup_tools()
+        self._setup_agents()
 
-    # 4. Compile with Memory and Interruption
-    if settings.CHECKPOINTER_TYPE == "redis":
-        # LangGraph requires a binary-safe connection (decode_responses=False).
-        # We use a dedicated client instance to avoid conflicts with the global singleton.
-        redis_client = AsyncRedis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, decode_responses=False)
-        memory = AsyncRedisSaver(redis_client=redis_client)
-    else:
-        memory = MemorySaver()
+        workflow = StateGraph(CknotAgentState, config_schema=CKnotConfig)
 
-    return workflow.compile(
-        checkpointer=memory,
-        interrupt_before=["tools", "log_parser", "deep_search"]  # Human confirm before potentially costly actions
-    )
+        # Define node functions using agent ainvoke methods
+        workflow.add_node("cknot", self.agents["cknot"].ainvoke)
+        workflow.add_node("log_parser", self.agents["log_parser"].ainvoke)
+        workflow.add_node("code_fixer", self.agents["code_fixer"].ainvoke)
+        workflow.add_node("deep_search", self.agents["deep_search"].ainvoke)
+        workflow.add_node("article_writer", self.agents["article_writer"].get_subgraph())
+        workflow.add_node("tools", ToolNode(self.tools))
+
+        # Define graph flow
+        workflow.set_entry_point("cknot")
+        workflow.add_conditional_edges("cknot", self._boss_router)
+        workflow.add_edge("tools", "cknot")
+        workflow.add_edge("log_parser", "code_fixer")
+        workflow.add_edge("code_fixer", END)
+        workflow.add_conditional_edges("deep_search", self._search_router)
+        
+        # After the sub-graph finishes, it returns to the Boss for final delivery
+        workflow.add_edge("article_writer", "cknot")
+
+        # Initialize persistence
+        if settings.CHECKPOINTER_TYPE == "redis":
+            redis_client = AsyncRedis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, decode_responses=False)
+            memory = AsyncRedisSaver(redis_client=redis_client)
+        else:
+            memory = MemorySaver()
+
+        return workflow.compile(
+            checkpointer=memory,
+            interrupt_before=["tools", "log_parser", "deep_search"]
+        )
+
+    def visualize_ascii(self):
+        """
+        Prints an ASCII representation of the graph to the console.
+        Useful for quick debugging directly in the terminal.
+        """
+        compiled_graph = self.build()
+        # print_ascii() outputs the graph structure using text characters
+        compiled_graph.get_graph().print_ascii()
+
+def create_graph() -> CompiledStateGraph:
+    """
+    Compatibility factory function that builds and returns the graph.
+    """
+    return GraphOrchestrator().build()

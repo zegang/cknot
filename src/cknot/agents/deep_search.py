@@ -2,7 +2,7 @@ from typing import Optional, List, Union, Dict, Any
 from pydantic import Field
 from langchain_core.language_models import BaseChatModel
 from langgraph.graph.state import RunnableConfig
-from cknot.schemas.state import AgentState
+from cknot.schemas.state import CknotAgentState
 from cknot.tools.web_search import web_search
 from cknot.agents.system_prompts import DEEP_SEARCH_PROMPT
 from cknot.schemas.llm_service import LLMService, LLMSelectPolicy
@@ -18,7 +18,7 @@ class DeepSearchAgent(CKnotBaseAgent):
 
     async def ainvoke(
         self,
-        state: AgentState,
+        state: CknotAgentState,
         config: RunnableConfig
     ) -> Dict[str, Any]:
         """

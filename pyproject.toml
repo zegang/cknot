@@ -25,6 +25,10 @@ dependencies = [
     "wikipedia>=1.4.0",
     "duckduckgo-search>=8.1.1",
     "ddgs>=9.14.4",
+    "llama-index>=0.14.22",
+    "llama-index-llms-langchain>=0.8.0",
+    "llama-index-embeddings-langchain>=0.5.0",
+    "grandalf>=0.8",
 ]
 
 [build-system]

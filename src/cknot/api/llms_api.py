@@ -1,8 +1,8 @@
-from fastapi import APIRouter, HTTPException, status, Path
-from typing import List
+from fastapi import APIRouter, HTTPException, status, Path, Query
+from typing import List, Optional
 import logging
 from cknot.utils.llm_manager import LLMManager
-from cknot.schemas.llm_service import LLMService
+from cknot.schemas.llm_service import LLMService, LLMServiceType
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +26,11 @@ async def register_llm_service(config: LLMService):
     summary="List all LLM services",
     description="Retrieve a list of all registered LLM service configurations."
 )
-async def list_llm_services():
+async def list_llm_services(
+    service_type: Optional[LLMServiceType] = Query(None, description="Filter services by type (e.g., chat, embedding)")
+):
     mgr = LLMManager()
-    return await mgr.alist_llm_services()
+    return await mgr.alist_llm_services(service_type=service_type)
 
 @router.get(
     "/{service_id}",

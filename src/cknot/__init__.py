@@ -1,7 +1,7 @@
 from cknot.graphs.orchestrator import create_graph
 from cknot.utils.logging_config import setup_logging
 from cknot.utils.redis_client import get_redis_client
-from cknot.schemas.state import AgentState
+from cknot.schemas.state import CknotAgentState
 from cknot.schemas.llm_service import LLMService
 from cknot.utils.llm_manager import LLMManager
 from cknot.utils.cleanup import delete_old_threads
@@ -12,7 +12,7 @@ __all__ = [
     "create_graph",
     "setup_logging",
     "get_redis_client",
-    "AgentState",
+    "CknotAgentState",
     "LLMService",
     "LLMManager",
     "delete_old_threads",

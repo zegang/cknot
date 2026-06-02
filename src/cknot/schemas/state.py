@@ -1,13 +1,15 @@
-from typing import Annotated, TypedDict, List, Optional
+import operator
+from typing import Annotated, TypedDict, List, Optional, Dict, Any
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
-class AgentState(TypedDict):
+class CknotAgentState(TypedDict):
     """Mutable working memory of the graph."""
     messages: Annotated[List[BaseMessage], add_messages]
     logs_file_path: Optional[str]
     parsed_issues: Optional[str]
     fix_result: Optional[str]
+    agent_summary: Annotated[Dict[str, Dict[str, Any]], operator.ior]
 
 class CKnotConfig(TypedDict):
     """Immutable configuration and context schema."""

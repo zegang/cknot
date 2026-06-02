@@ -1,12 +1,13 @@
 import logging
 import time
+import json
 import uuid
 from typing import List, Optional, Union, Dict, Any
 from pydantic import Field
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import SystemMessage, BaseMessage
+from langchain_core.messages import SystemMessage, BaseMessage, AIMessage, HumanMessage
 from langgraph.graph.state import RunnableConfig
-from cknot.schemas.state import AgentState
+from cknot.schemas.state import CknotAgentState
 from cknot.agents.system_prompts import CKNOT_BOSS_PROMPT
 from cknot.schemas.llm_service import LLMService, LLMSelectPolicy
 from cknot.agents.registry import AgentRegistry
@@ -23,7 +24,7 @@ class CKnotBossAgent(CKnotBaseAgent):
     system_prompt: str = Field(default=CKNOT_BOSS_PROMPT)
     sub_agents: List[CKnotBaseAgent] = Field(default_factory=list)
 
-    def _get_messages(self, state: AgentState) -> List[BaseMessage]:
+    def _get_messages(self, state: CknotAgentState) -> List[BaseMessage]:
         """Overrides base to inject specialist capabilities into the Boss prompt."""
         team_manifest = "\n\nTEAM DIRECTORY & DELEGATION PROTOCOL:\n"
         for agent in self.sub_agents:
@@ -36,20 +37,43 @@ class CKnotBossAgent(CKnotBaseAgent):
                 trigger = "TRIGGER_DEEP_SEARCH"
             elif "LogParser" in name:
                 trigger = "TRIGGER_LOG_ANALYSIS"
+            elif "ArticleWriter" in name:
+                trigger = "TRIGGER_ARTICLE_WRITING"
             else:
                 trigger = f"TRIGGER_{name.upper()}"
             
             team_manifest += f"- {name}: Expert in [{good}]. Avoid for [{poor}].\n"
             team_manifest += f"  TO DELEGATE: You must include the keyword '{trigger}' in your response.\n"
+
+        # Inject summaries from specialists if any exist in the state
+        agent_summaries = state.get("agent_summary", {}) if isinstance(state, dict) else getattr(state, "agent_summary", {})
+        if agent_summaries:
+            team_manifest += "\n\nREPORTS FROM SPECIALISTS (Use these to answer the user):\n"
+            
+            # Sort summaries chronologically by timestamp
+            sorted_summaries = sorted(agent_summaries.items(), key=lambda x: x[1].get("timestamp", ""))
+            for agent_key, data in sorted_summaries:
+                content = data.get("content", "")
+                ts = data.get("timestamp", "unknown time")
+                status = data.get("status", "SUCCESS")
+                team_manifest += f"- {agent_key} [{status}] (at {ts}): {content}\n"
             
         enhanced_prompt = f"{self.system_prompt}{team_manifest}"
         
         current_messages = state.get("messages", []) if isinstance(state, dict) else state.messages
-        return [SystemMessage(content=enhanced_prompt)] + current_messages
+
+        # Best Practice: Suffix with HumanMessage to force model generation
+        full_messages = [SystemMessage(content=enhanced_prompt)] + current_messages
+        if full_messages and isinstance(full_messages[-1], AIMessage):
+            full_messages.append(
+                HumanMessage(content="Analyze the team reports and user history above, then provide your next instruction or final answer.")
+            )
+
+        return full_messages
 
     async def ainvoke(
         self,
-        state: AgentState,
+        state: CknotAgentState,
         config: RunnableConfig
     )-> Dict[str, Any]:
         """
@@ -59,7 +83,7 @@ class CKnotBossAgent(CKnotBaseAgent):
 
     async def astream(
         self, 
-        state: AgentState,
+        state: CknotAgentState,
         config: RunnableConfig
     ):
         """
@@ -78,14 +102,14 @@ class CKnotBossAgent(CKnotBaseAgent):
         llm_manager = LLMManager()
         llm_svc_client = llm_manager.get_llm_service_client(active_llm.id)
 
-        llm_svc_clinet_with_tools = llm_svc_client.bind_tools(self.tools) if self.tools else llm_svc_client
+        llm_svc_client_with_tools = llm_svc_client.bind_tools(self.tools) if self.tools else llm_svc_client
         messages = self._get_messages(state)
         final_chunk = None
 
         # Generate a stable ID for this turn to ensure chunks merge correctly in LangGraph
         turn_id = str(uuid.uuid4())
 
-        async for chunk in llm_svc_clinet_with_tools.astream(messages):
+        async for chunk in llm_svc_client_with_tools.astream(messages):
             chunk.id = turn_id
             # Accumulate chunks to compute final usage metadata
             if final_chunk is None:
@@ -102,7 +126,11 @@ class CKnotBossAgent(CKnotBaseAgent):
         # Extract usage from the aggregated message if available
         usage = getattr(final_chunk, "usage_metadata", None)
         
-        # Log summarized interaction for better clarity
-        messages[-1].content if messages else "None"
+        # Log full interaction in JSON style for debugging
+        log_msg = (
+            f"LLM: {active_llm.model_name}\n"
+            f"Request: {json.dumps([m.dict() for m in messages], indent=2, ensure_ascii=False, default=str)}\n"
+            f"Response: {json.dumps(final_chunk.dict() if final_chunk else {}, indent=2, ensure_ascii=False, default=str)}"
+        )
         
-        self._log_metrics(start_time, usage=usage, mode="streaming invocation")
+        self._log_metrics(start_time, usage=usage, mode="streaming invocation", message=log_msg)

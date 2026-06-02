@@ -28,4 +28,8 @@ class Settings:
     def DEFAULT_LLM_SERVICE(self) -> str:
         return os.getenv("DEFAULT_LLM_SERVICE_ID", "default-llm")
 
+    @property
+    def USE_DEFAULT_LLM_FALLBACK(self) -> bool:
+        return os.getenv("USE_DEFAULT_LLM_FALLBACK", "True").lower() == "true"
+
 settings = Settings()

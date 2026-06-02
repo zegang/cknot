@@ -4,13 +4,13 @@ from typing import Optional, List, Any, Union
 from redis import Redis
 from redis.asyncio import Redis as AsyncRedis
 from pydantic import ValidationError
-from langchain_openai import ChatOpenAI
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_core.language_models import BaseChatModel
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import HumanMessage
 from langchain_core.outputs import LLMResult
 from cknot.utils.redis_client import get_redis_client
-from cknot.schemas.llm_service import LLMService, LLMProvider
+from cknot.schemas.llm_service import LLMService, LLMProvider, LLMServiceType
 
 logger = logging.getLogger(__name__)
 
@@ -94,24 +94,20 @@ class LLMManager:
             logger.error(f"Invalid LLM service config for '{service_id}': {e}")
             return None
 
-    def list_llm_services(self) -> List[LLMService]:
-        """Lists all registered LLM services."""
+    def list_llm_services(self, service_type: Optional[LLMServiceType] = None) -> List[LLMService]:
+        """Lists all registered LLM services, optionally filtered by type."""
         if self._is_async:
             raise RuntimeError("Cannot use sync list_llm_services with an async client. Use alist_llm_services.")
         services = []
         for key in self._redis.scan_iter(f"{self._llm_service_prefix}*"):
-            # key is already a string because decode_responses=True in redis_client
             service_id = key.replace(self._llm_service_prefix, '')
             service = self.get_llm_service(service_id)
-            if service:
+            if service and (service_type is None or service.service_type == service_type):
                 services.append(service)
         return services
 
     def get_llm_service_client(self, service_id: str) -> BaseChatModel:
         """Instantiates and returns an LLM client based on the LLM service ID."""
-        if not self._active_services[service_id].is_enabled:
-            raise ValueError(f"LLM service '{service_id}' is disabled.")
-
         # Return from cache if already instantiated
         if service_id in self._active_services and self._active_services[service_id]._svc_client:
             return self._active_services[service_id]._svc_client
@@ -119,22 +115,104 @@ class LLMManager:
         service = self.get_llm_service(service_id)
         if not service:
             raise ValueError(f"LLM service '{service_id}' not found or invalid.")
+            
+        if not service.is_enabled:
+            raise ValueError(f"LLM service '{service_id}' is disabled.")
+
+        # Ensure this service is intended for chat/completion
+        if hasattr(service, "service_type") and service.service_type != "chat":
+            raise ValueError(f"Service '{service_id}' is a {service.service_type} service, not a chat service.")
 
         try:
             # Create a tracker bound to this specific config object
             tracker = TokenUsageTracker(service)
 
-            service._svc_client = ChatOpenAI(
-                model=service.model_name,
-                api_key=service.api_key,
-                base_url=str(service.base_url) if service.base_url else None,
-                callbacks=[tracker] # Attach the usage tracker
-            )
+            # Handle OpenAI-compatible providers
+            if service.provider in [LLMProvider.OPENAI, LLMProvider.OLLAM, LLMProvider.VLLM, LLMProvider.SGLANG]:
+                service._svc_client = ChatOpenAI(
+                    model=service.model_name,
+                    api_key=service.api_key or "no-key-required",
+                    base_url=str(service.base_url) if service.base_url else None,
+                    callbacks=[tracker] # Attach the usage tracker
+                )
+            elif service.provider == LLMProvider.AZURE:
+                # Placeholder: Requires AzureChatOpenAI from langchain-openai
+                raise NotImplementedError("AzureChatOpenAI integration requires specific configuration and is not yet implemented.")
+            else:
+                raise NotImplementedError(f"Provider '{service.provider}' is not natively supported. Ensure it's OpenAI-compatible or add client logic.")
+
             self._active_services[service_id] = service
             return self._active_services[service_id]._svc_client
         except Exception as e:
             logger.error(f"Failed to instantiate LLM client for '{service_id}': {e}")
-            raise NotImplementedError(f"LLM provider '{service.provider}' is not yet supported.")
+            raise
+
+    def get_llama_index_llm(self, service_id: str):
+        """
+        Returns a LlamaIndex-compatible LLM wrapper that shares the 
+        underlying LangChain instance from the registry.
+        """
+        try:
+            from llama_index.llms.langchain import LangChainLLM
+            return LangChainLLM(llm=self.get_llm_service_client(service_id))
+        except ImportError:
+            raise ImportError("Please install 'llama-index-llms-langchain' to use LlamaIndex integration.")
+
+    def get_embedding_service_client(self, service_id: str):
+        """Instantiates and returns a LangChain embedding client based on the service ID."""
+        service = self.get_llm_service(service_id)
+        if not service:
+            raise ValueError(f"LLM service '{service_id}' not found or invalid.")
+            
+        if not service.is_enabled:
+            raise ValueError(f"LLM service '{service_id}' is disabled.")
+
+        # Ensure this service is intended for embeddings
+        if hasattr(service, "service_type") and service.service_type != "embedding":
+            raise ValueError(f"Service '{service_id}' is a {service.service_type} service, not an embedding service.")
+
+        # Return from cache if already instantiated
+        if service._svc_client:
+            return service._svc_client
+
+        try:
+            if service.provider in [LLMProvider.OPENAI, LLMProvider.OLLAM, LLMProvider.VLLM, LLMProvider.SGLANG]:
+                client = OpenAIEmbeddings(
+                    model=service.model_name,
+                    api_key=service.api_key or "no-key-required",
+                    base_url=str(service.base_url) if service.base_url else None,
+                )
+            else:
+                raise NotImplementedError(f"Embedding provider '{service.provider}' is not yet supported natively.")
+
+            service._svc_client = client
+            self._active_services[service_id] = service
+            return client
+        except Exception as e:
+            logger.error(f"Failed to instantiate embedding client for '{service_id}': {e}")
+            raise
+
+    def get_llama_index_embeddings(self, service_id: str):
+        """
+        Returns a LlamaIndex-compatible embedding wrapper that shares the 
+        underlying LangChain instance.
+        """
+        try:
+            from llama_index.embeddings.langchain import LangchainEmbedding
+            return LangchainEmbedding(langchain_embeddings=self.get_embedding_service_client(service_id))
+        except ImportError:
+            raise ImportError("Please install 'llama-index-embeddings-langchain' to use LlamaIndex integration.")
+
+    async def aget_embedding_service_client(self, service_id: str):
+        """Async version of getting an embedding client."""
+        if service_id in self._active_services and self._active_services[service_id]._svc_client:
+            return self._active_services[service_id]._svc_client
+        
+        service = await self.aget_llm_service(service_id)
+        if not service:
+            raise ValueError(f"LLM service '{service_id}' not found.")
+        
+        return self.get_embedding_service_client(service_id)
 
     def delete_llm_service(self, service_id: str):
         """Deletes an LLM service from Redis."""
@@ -180,15 +258,15 @@ class LLMManager:
             logger.error(f"Invalid LLM service config for '{service_id}': {e}")
             return None
 
-    async def alist_llm_services(self) -> List[LLMService]:
-        """Lists all registered LLM services (Asynchronous)."""
+    async def alist_llm_services(self, service_type: Optional[LLMServiceType] = None) -> List[LLMService]:
+        """Lists all registered LLM services (Asynchronous), optionally filtered by type."""
         if not self._is_async:
-            return self.list_llm_services()
+            return self.list_llm_services(service_type)
         services = []
         async for key in self._redis.scan_iter(f"{self._llm_service_prefix}*"):
             service_id = key.replace(self._llm_service_prefix, '')
             service = await self.aget_llm_service(service_id)
-            if service:
+            if service and (service_type is None or service.service_type == service_type):
                 services.append(service)
         return services
 
@@ -228,12 +306,19 @@ class LLMManager:
             return False
 
         try:
-            llm = await self.aget_llm_service_client(service_id)
-            # Perform a minimal connectivity check with a timeout
-            await llm.ainvoke(
-                [HumanMessage(content="connectivity check")], 
-                config={"timeout": 10}
-            )
+            if getattr(config, "service_type", "chat") == "embedding":
+                # If it's an embedding service, use the embedding validation logic
+                embed_model = await self.aget_embedding_service_client(service_id)
+                await embed_model.aembed_query("connectivity check")
+            else:
+                # Default to chat validation
+                llm = await self.aget_llm_service_client(service_id)
+                # Perform a minimal connectivity check with a timeout
+                await llm.ainvoke(
+                    [HumanMessage(content="connectivity check")], 
+                    config={"timeout": 10}
+                )
+            
             config.is_valid = True
             logger.info(f"LLM service '{service_id}' connectivity check passed.")
         except Exception as e:
@@ -241,6 +326,37 @@ class LLMManager:
             config.is_valid = False
 
         # Persist updated status to Redis and invalidate cache to ensure fresh state
+        await self.aregister_llm_service(config)
+        return config.is_valid
+
+    async def validate_embedding_service(self, service_id: str) -> bool:
+        """
+        Validates the connectivity of an embedding service and updates its is_valid status.
+        """
+        config = await self.aget_llm_service(service_id)
+        if not config:
+            logger.error(f"Cannot validate: Embedding service '{service_id}' not found.")
+            return False
+
+        if not config.is_enabled:
+            logger.warning(f"Embedding service '{service_id}' is disabled. Skipping validation.")
+            return False
+
+        try:
+            # Retrieve the embedding model client
+            embed_model = await self.aget_embedding_service_client(service_id)
+            
+            # Perform a minimal connectivity check by embedding a short string.
+            # LangChain's Embeddings classes implement aembed_query for async execution.
+            await embed_model.aembed_query("connectivity check")
+            
+            config.is_valid = True
+            logger.info(f"Embedding service '{service_id}' connectivity check passed.")
+        except Exception as e:
+            logger.warning(f"Connectivity check failed for embedding service '{service_id}': {e}")
+            config.is_valid = False
+
+        # Persist updated status to Redis and refresh state
         await self.aregister_llm_service(config)
         return config.is_valid
 

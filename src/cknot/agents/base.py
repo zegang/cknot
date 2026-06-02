@@ -1,13 +1,15 @@
 import time
 import random
+import json
 import logging
 from typing import List, Optional, Any, Dict, Union
 import uuid
 from pydantic import BaseModel, Field, PrivateAttr, ConfigDict
-from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage
+from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage, AIMessage
 from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import RunnableConfig
-from cknot.schemas.state import AgentState
+from cknot.config.config import settings
+from cknot.schemas.state import CknotAgentState
 from cknot.schemas.llm_service import LLMService, LLMSelectPolicy
 from cknot.utils.llm_manager import LLMManager
 
@@ -18,13 +20,13 @@ class CKnotBaseAgent(BaseModel):
     Base class for all CKnot agents.
     Encapsulates system prompt management and standardized LLM invocation logic.
     """
-    system_prompt: str
+    name: str = Field(default="")
+    system_prompt: str = Field(default="")
     llm_services: List[LLMService] = Field(default_factory=list)
     llm_select_policy: LLMSelectPolicy = Field(default=LLMSelectPolicy.FIRST)
     good_at: List[str] = Field(default_factory=list)
     poor_at: List[str] = Field(default_factory=list)
     tools: List[Any] = Field(default_factory=list)
-    name: str = Field(default="")
     
     _uuid: str = PrivateAttr(default_factory=lambda: str(uuid.uuid4()))
 
@@ -34,7 +36,7 @@ class CKnotBaseAgent(BaseModel):
         if not self.name:
             self.name = self.__class__.__name__
 
-    def _get_messages(self, state: AgentState) -> List[BaseMessage]:
+    def _get_messages(self, state: CknotAgentState) -> List[BaseMessage]:
         """Prepares the message list with system prompt injection."""
         # Handle both list of messages or the state object
         current_messages = state.get("messages", []) if isinstance(state, dict) else state.messages
@@ -46,11 +48,22 @@ class CKnotBaseAgent(BaseModel):
                 HumanMessage(content="I am ready to help. Please provide your instructions or ask a question.")
             ]
 
-        # Use the last user input
-        last_user_msg = next(
-            (m for m in reversed(current_messages) if isinstance(m, HumanMessage)),
-            HumanMessage(content="I am ready to help. Please provide your instructions or ask a question."))
-        return [SystemMessage(content=self.system_prompt), last_user_msg]
+        # Filter out routing keywords (Boss delegation chatter) to prevent LLM confusion
+        filtered_history = [
+            m for m in current_messages 
+            if not (isinstance(m, AIMessage) and "TRIGGER_" in m.content)
+        ]
+
+        # Best Practice: Ensure the conversation ends with a HumanMessage to prompt the LLM.
+        # Local models (Ollama/Qwen) often return empty content if the history tails with an AIMessage.
+        full_messages = [SystemMessage(content=self.system_prompt)] + filtered_history
+        
+        if full_messages and isinstance(full_messages[-1], AIMessage):
+            full_messages.append(
+                HumanMessage(content="Please provide your next response based on the conversation and instructions above.")
+            )
+            
+        return full_messages
 
     def _log_metrics(self, start_time: float,
                      usage: Optional[Dict[str, Any]] = None,
@@ -85,15 +98,14 @@ class CKnotBaseAgent(BaseModel):
         if len(self.llm_services) < initial_count:
             logger.debug(f"LLM service '{service_id}' removed from agent {self.name} ({self._uuid[:8]}).")
 
-    def _select_llm_service(self, state: AgentState) -> Optional[LLMService]:
+    def _select_llm_service(self, state: CknotAgentState) -> Optional[LLMService]:
         """
         Selects an LLM service based on the configured policy.
         """
-        if not self.llm_services:
-            return None
-
         enabled_services = [s for s in self.llm_services if s.is_enabled]
         if not enabled_services:
+            if settings.USE_DEFAULT_LLM_FALLBACK:
+                return LLMManager().get_llm_service(settings.DEFAULT_LLM_SERVICE)
             return None
 
         # Apply Policies
@@ -131,7 +143,7 @@ class CKnotBaseAgent(BaseModel):
 
     async def ainvoke(
         self, 
-        state: AgentState,
+        state: CknotAgentState,
         config: RunnableConfig
     ) -> Dict[str, Any]:
         """
@@ -151,22 +163,27 @@ class CKnotBaseAgent(BaseModel):
         llm_manager = LLMManager()
         llm_svc_client = llm_manager.get_llm_service_client(active_llm.id)
 
-        llm_svc_clinet_with_tools = llm_svc_client.bind_tools(self.tools) if self.tools else llm_svc_client
+        llm_svc_client_with_tools = llm_svc_client.bind_tools(self.tools) if self.tools else llm_svc_client
         messages = self._get_messages(state)
 
         # Generate a stable ID for logging consistency
         turn_id = str(uuid.uuid4())
         logger.debug(f"Agent {self.name} ({self._uuid[:8]}) invoking LLM {active_llm.model_name} with turn_id: {turn_id}")
-        response = await llm_svc_clinet_with_tools.ainvoke(messages)
+        response = await llm_svc_client_with_tools.ainvoke(messages)
         response.id = turn_id
 
         # Extract usage metadata if available (standard in newer LangChain versions)
         usage = getattr(response, "usage_metadata", None)
+
+        # Prepare JSON-style representations for logging
+        req_json = json.dumps([m.dict() for m in messages], indent=2, ensure_ascii=False, default=str)
+        res_json = json.dumps(response.dict(), indent=2, ensure_ascii=False, default=str)
+
         self._log_metrics(
             start_time, 
             usage=usage, 
             mode="ainvoke",
-            message=f'LLM: {active_llm.model_name}\nRequest: {messages}\nResponse: {response}'
+            message=f'LLM: {active_llm.model_name}\nRequest: {req_json}\nResponse: {res_json}'
         )
 
         # Ensure we return a dictionary to update the graph state

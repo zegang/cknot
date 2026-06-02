@@ -1,130 +1,157 @@
-import os
 import logging
-from rich.rule import Rule
 from rich.table import Table
 from rich.panel import Panel
-from rich.markdown import Markdown
-from cknot.config.config import settings
-from cknot.agents.registry import AgentRegistry
+from rich.prompt import Prompt, Confirm
 from cknot.utils.llm_manager import LLMManager
+from cknot.schemas.llm_service import LLMServiceType
+from cknot.utils.redis_client import get_redis_client
 from .base import COMMAND_REGISTRY
 from langgraph.graph.state import CompiledStateGraph
+from cknot.agents.registry import AgentRegistry
 
 logger = logging.getLogger(__name__)
 
 @COMMAND_REGISTRY.register("/agents")
 async def handle_agents(app: CompiledStateGraph, config, console, args):
-    """Manages agent configuration and LLM mappings."""
-    console.print(Panel(handle_agents.get_usage(), title="Agent Management", border_style="magenta"))
+    """Manages agents. Subcommands: list, llm, rm"""
+    # Root command for agents management.
+    pass
 
 @handle_agents.subcommand("list", is_default=True)
 async def handle_agents_list(app: CompiledStateGraph, config, console, args):
-    """Lists all registered agents."""
-    console.print(Rule("Detailed Agent Dump", style="bold magenta"))
-    for name in AgentRegistry.list_agents().keys():
-        status = AgentRegistry.get_agent_status(name)
-        if not status:
-            continue
-        content = (
-            f"[bold cyan]Name:[/bold cyan] {name}\n"
-            f"[bold green]Good at:[/bold green] {', '.join(status['good_at']) if status['good_at'] else 'N/A'}\n"
-            f"[bold red]Poor at:[/bold red] {', '.join(status['poor_at']) if status['poor_at'] else 'N/A'}\n"
-            f"[bold yellow]Policy:[/bold yellow] {status['llm_select_policy']}\n"
-            f"[bold blue]LLMs:[/bold blue] {', '.join(status['llm_services']) if status['llm_services'] else 'None'}\n"
-            f"[bold white]Tools:[/bold white] {', '.join(status['tools']) if status['tools'] else 'None'}"
-        )
-        console.print(Panel(content, title=f"Agent: {name}", border_style="cyan"))
-        console.print("")
-    console.print(Rule(style="bold magenta"))
-
-@handle_agents.subcommand("llm")
-async def handle_agents_llm(app: CompiledStateGraph, config, console, args):
-    """Configure LLM mapping for agents."""
-    console.print(Panel(handle_agents_llm.get_usage(), title="Agent LLM Configuration", border_style="yellow"))
-
-@handle_agents_llm.subcommand("set")
-async def handle_agents_llm_set(app: CompiledStateGraph, config, console, args):
-    """Assign an LLM service to a specific agent. Usage: set <agent_id> <llm_id>"""
-    if len(args) < 2:
-        console.print("[red]Usage: /agents llm set <agent_id> <llm_id>[/red]")
-        return
-    agent_id, llm_id = args[0], args[1]
-    agent = AgentRegistry.get_agent(agent_id)
+    """Lists all registered agents and their specialized capabilities."""
+    agents = AgentRegistry.list_agents()
     
-    if not agent:
-        console.print(f"[bold red]Error: '{agent_id}' is not a registered agent.[/bold red]")
+    if not agents:
+        console.print("[yellow]No agents registered in the AgentRegistry.[/yellow]")
         return
 
-    mgr = LLMManager()
-    svc = mgr.get_llm_service(llm_id)
-    agent.add_llm_service(svc)
-    console.print(f"[bold green]✔ Assigned {llm_id} to {agent_id}[/bold green]")
+    table = Table(title="Agent Registry", border_style="cyan", header_style="bold cyan")
+    table.add_column("Agent ID", style="bold cyan")
+    table.add_column("Excels At", ratio=1)
+    table.add_column("Struggles With", ratio=1)
 
-@handle_agents_llm.subcommand("remove")
-async def handle_agents_llm_remove(app: CompiledStateGraph, config, console, args):
-    """Remove a specific LLM mapping for an agent. Usage: remove <agent_id> <llm_id>"""
-    if not args:
-        console.print("[red]Usage: /agents llm remove <agent_id>[/red]")
-        return
-    agent_id, llm_id = args[0], args[1]
-    agent = AgentRegistry.get_agent(agent_id)
-    mgr = LLMManager()
-    svc = mgr.get_llm_service(llm_id)
-    agent.remove_llm_service(svc)
-    console.print(f"[bold green]✔ Removed specific LLM mapping for {agent_id}.[/bold green]")
+    for name, agent in agents.items():
+        good = ", ".join(agent.good_at)
+        poor = ", ".join(agent.poor_at)
+        table.add_row(name, good, poor)
 
-@handle_agents.subcommand("unregister")
-async def handle_agents_unregister(app: CompiledStateGraph, config, console, args):
-    """Unregisters an agent from the system. Usage: unregister <agent_id>"""
-    if not args:
-        console.print("[red]Usage: /agents unregister <agent_id>[/red]")
-        return
-    agent_id = args[0]
-    AgentRegistry.unregister_agent(agent_id)
-    console.print(f"[bold green]✔ Agent '{agent_id}' unregistered from the registry.[/bold green]")
+    console.print(table)
 
 @handle_agents.subcommand("info")
 async def handle_agents_info(app: CompiledStateGraph, config, console, args):
-    """Shows detailed info for a specific agent. Usage: info <agent_id>"""
-    if not args:
-        console.print("[red]Usage: /agents info <agent_id>[/red]")
-        return
-    agent_id = args[0]
+    """Shows detailed metadata for a specific agent. Usage: info <agent_id>"""
+    agent_id = args[0] if args else None
+
+    if not agent_id:
+        agents = AgentRegistry.list_agents()
+        if not agents:
+            console.print("[yellow]No agents registered in the AgentRegistry.[/yellow]")
+            return
+            
+        choices = list(agents.keys())
+        console.print(f"[bold cyan]Registered Agents:[/bold cyan] {', '.join(choices)}")
+        agent_id = Prompt.ask("Select an Agent ID", choices=choices)
+
     status = AgentRegistry.get_agent_status(agent_id)
+
     if not status:
-        console.print(f"[bold red]Error: Agent '{agent_id}' not found.[/bold red]")
+        console.print(f"[red]Error: Agent '{agent_id}' not found in registry.[/red]")
         return
 
-    console.print(Panel(
-        f"[bold cyan]Name:[/bold cyan] {status['name']}\n"
-        f"[bold green]Good at:[/bold green] {', '.join(status['good_at']) if status['good_at'] else 'N/A'}\n"
-        f"[bold red]Poor at:[/bold red] {', '.join(status['poor_at']) if status['poor_at'] else 'N/A'}\n"
-        f"[bold yellow]Policy:[/bold yellow] {status['llm_select_policy']}\n"
-        f"[bold blue]LLMs:[/bold blue] {', '.join(status['llm_services']) if status['llm_services'] else 'None'}\n"
-        f"[bold white]Tools:[/bold white] {', '.join(status['tools']) if status['tools'] else 'None'}",
-        title=f"Agent: {agent_id}",
-        border_style="magenta"
-    ))
+    info_text = (
+        f"[bold]Name:[/bold] {status['name']}\n"
+        f"[bold]Class:[/bold] {status['class']}\n"
+        f"[bold]Good at:[/bold] {', '.join(status['good_at']) or 'None'}\n"
+        f"[bold]Poor at:[/bold] {', '.join(status['poor_at']) or 'None'}\n"
+        f"[bold]Policy:[/bold] {status['llm_select_policy']}\n"
+        f"[bold]LLMs:[/bold] {', '.join(status['llm_services']) or 'None'}\n"
+        f"[bold]Tools:[/bold] {', '.join(status['tools']) or 'None'}\n"
+        f"\n[bold]System Prompt:[/bold]\n[dim]{status['system_prompt']}[/dim]"
+    )
 
-@handle_agents.subcommand("status")
-async def handle_agents_status(app: CompiledStateGraph, config, console, args):
+    console.print(Panel(info_text, title=f"Agent: {agent_id}", border_style="cyan"))
+
+@handle_agents.subcommand("rm")
+async def handle_agents_rm(app: CompiledStateGraph, config, console, args):
+    """Unregisters an agent from the system. Usage: rm <agent_id>"""
+    agent_id = args[0] if args else None
+    
+    if not agent_id:
+        agents = AgentRegistry.list_agents()
+        if not agents:
+            console.print("[yellow]No agents registered in the AgentRegistry.[/yellow]")
+            return
+            
+        choices = list(agents.keys())
+        console.print(f"[bold cyan]Registered Agents:[/bold cyan] {', '.join(choices)}")
+        agent_id = Prompt.ask("Select an Agent ID to unregister", choices=choices)
+
+    if Confirm.ask(f"[bold red]Unregister agent '{agent_id}' from the system?[/bold red]"):
+        AgentRegistry.unregister_agent(agent_id)
+        console.print(f"[bold green]✔[/bold green] Agent [cyan]{agent_id}[/cyan] has been unregistered.")
+
+@handle_agents.subcommand("llm")
+async def handle_agents_llm(app: CompiledStateGraph, config, console, args):
+    """Manage agent LLM assignments. Subcommands: set"""
+    pass
+
+@handle_agents_llm.subcommand("set")
+async def handle_agents_llm_set(app: CompiledStateGraph, config, console, args):
     """
-    Shows a summary status of all registered agents.
+    Sets the LLM for a specific agent.
+    Usage: /agents llm set <agent_id> [service_id]
     """
-    agents = AgentRegistry.list_agents()
-    if not agents:
-        console.print("[yellow]No agents registered in the system.[/yellow]")
+    agent_id = args[0] if args else None
+
+    if not agent_id:
+        agents = AgentRegistry.list_agents()
+        if not agents:
+            console.print("[yellow]No agents registered in the AgentRegistry.[/yellow]")
+            return
+            
+        choices = list(agents.keys())
+        console.print(f"[bold cyan]Registered Agents:[/bold cyan] {', '.join(choices)}")
+        agent_id = Prompt.ask("Select an Agent ID", choices=choices)
+
+    agent = AgentRegistry.get_agent(agent_id)
+
+    if not agent:
+        console.print(f"[red]Error: Agent '{agent_id}' not found.[/red]")
         return
 
-    table = Table(title="Agent Registry Summary", border_style="magenta", header_style="bold magenta")
-    table.add_column("Agent ID", style="cyan")
-    table.add_column("Class Implementation")
-    table.add_column("Capabilities", ratio=1)
+    # The CLI typically uses the synchronous manager for configuration tasks
+    mgr = LLMManager(get_redis_client())
 
-    for agent in agents:
-        info = AgentRegistry.get_agent_status(agent)
-        if info:
-            caps = ", ".join(info.get("good_at", [])) or "General"
-            table.add_row(agent, info.get("class", "Unknown"), caps)
+    # If service_id is not provided as an argument, fetch and list available CHAT services
+    service_id = args[1] if len(args) > 1 else None
+    
+    if not service_id:
+        # Use the filtered list capability to retrieve only models intended for chat
+        chat_services = mgr.list_llm_services(service_type=LLMServiceType.CHAT)
+        
+        if not chat_services:
+            console.print("[yellow]No 'chat' type services registered. Please add one using '/llms add'.[/yellow]")
+            return
 
-    console.print(table)
+        table = Table(title=f"Available Chat Models for {agent_id}", border_style="cyan")
+        table.add_column("ID", style="bold")
+        table.add_column("Name")
+        table.add_column("Provider")
+        table.add_column("Model")
+        
+        for s in chat_services:
+            table.add_row(s.id, s.name, s.provider.value, s.model_name)
+        
+        console.print(table)
+        service_id = Prompt.ask("Select a Service ID")
+
+    # Validate that the chosen service exists and is suitable for an agent (chat type)
+    service = mgr.get_llm_service(service_id)
+    if not service or service.service_type != LLMServiceType.CHAT:
+        console.print(f"[red]Error: '{service_id}' is not a valid chat service. Agents require models with 'chat' service_type.[/red]")
+        return
+
+    # Implementation note: In a full system, you would persist this assignment to Redis/Config
+    agent.add_llm_service(service)
+    console.print(f"[bold green]✔[/bold green] Assigned chat service [cyan]{service_id}[/cyan] to agent [cyan]{agent_id}[/cyan].")

@@ -21,6 +21,13 @@ class LLMProvider(str, Enum):
     HUGGINGFACE = "huggingface"
     AI21 = "ai21"
 
+class LLMServiceType(str, Enum):
+    """Enum for LLM service types."""
+    CHAT = "chat"
+    EMBEDDING = "embedding"
+    RERANK = "rerank"
+    IMAGE = "image"
+
 class LLMService(BaseModel):
     """
     Schema for configuring an LLM service.
@@ -28,6 +35,7 @@ class LLMService(BaseModel):
     id: str = Field(..., description="Unique identifier for this LLM service (e.g., 'default_vllm', 'openai_gpt4').")
     name: str = Field(..., description="Human-readable name for the LLM service.")
     provider: LLMProvider = Field(..., description="The LLM provider (e.g., 'openai', 'anthropic', 'vllm').")
+    service_type: LLMServiceType = Field(LLMServiceType.CHAT, description="The type of service (e.g., 'chat', 'embedding', 'rerank').")
     model_name: str = Field(..., description="The specific model name (e.g., 'gpt-4o', 'vicuna-7b-v1.5').")
     api_key: Optional[str] = Field(None, description="API key for the LLM service. Will be redacted in logs.")
     base_url: Optional[HttpUrl] = Field(None, description="Base URL for custom API endpoints (e.g., vLLM).")
