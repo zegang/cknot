@@ -17,9 +17,6 @@ from langgraph.prebuilt import ToolNode
 
 logger = logging.getLogger(__name__)
 
-# Context variable to hold the task-local system prompt during parallel execution
-_current_prompt: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("article_writer_prompt", default=None)
-
 ARTICLE_WRITER_PROMPT = (
     "You are an Elite Content Strategist and Article Writer. You produce authoritative, long-form content.\n"
     "Your workflow MUST follow these stages:\n"
