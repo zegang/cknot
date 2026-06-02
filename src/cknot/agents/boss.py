@@ -7,14 +7,23 @@ from pydantic import Field
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import SystemMessage, BaseMessage, AIMessage, HumanMessage
 from langgraph.graph.state import RunnableConfig
+from pydantic import Field
 from cknot.schemas.state import CknotAgentState
-from cknot.agents.system_prompts import CKNOT_BOSS_PROMPT
 from cknot.schemas.llm_service import LLMService, LLMSelectPolicy
 from cknot.agents.registry import AgentRegistry
 from cknot.agents.base import CKnotBaseAgent
 from cknot.utils.llm_manager import LLMManager
 
 logger = logging.getLogger(__name__)
+
+CKNOT_BOSS_PROMPT = (
+    "You are 'cknot', the central orchestrator. Your primary responsibility is task triage and delegation.\n\n"
+    "1. ANALYZE: Review the user's input and compare it against the 'Good at' capabilities in your Team Directory.\n"
+    "2. DELEGATE: If a specialist is better suited for the task, delegate immediately by including their specific 'TRIGGER' keyword. Briefly explain that you are calling a specialist, then include the keyword.\n"
+    "3. LOGS/DEBUG: If the task involves log analysis or debugging, you MUST include 'TRIGGER_LOG_ANALYSIS'.\n"
+    "4. DIRECT ACTION: If no specialist matches, or if you can solve it with your own tools/knowledge, respond directly.\n\n"
+    "Maintain a professional, authoritative, and efficient persona."
+)
 
 class CKnotBossAgent(CKnotBaseAgent):
     """
@@ -121,7 +130,10 @@ class CKnotBossAgent(CKnotBaseAgent):
             # Trailing empty metadata chunks can cause routing logic to fail if they 
             # are treated as the 'last message' in a non-merging scenario.
             if chunk.content or chunk.tool_calls:
-                yield {"messages": [chunk]}
+                yield {
+                    "messages": [chunk],
+                    "current_progress": "cknot is thinking..."
+                }
 
         # Extract usage from the aggregated message if available
         usage = getattr(final_chunk, "usage_metadata", None)

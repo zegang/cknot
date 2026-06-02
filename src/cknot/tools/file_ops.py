@@ -14,3 +14,15 @@ def read_log_file(file_path: str) -> str:
             return f.read()
     except Exception as e:
         return f"Error reading file: {str(e)}"
+
+@tool
+def write_file(file_path: str, content: str, append: bool = False) -> str:
+    """Writes or appends content to a local file."""
+    try:
+        mode = "a" if append else "w"
+        os.makedirs(os.path.dirname(os.path.abspath(file_path)), exist_ok=True)
+        with open(file_path, mode, encoding="utf-8") as f:
+            f.write(content)
+        return f"Successfully {'appended to' if append else 'wrote to'} {file_path}"
+    except Exception as e:
+        return f"Error writing file: {str(e)}"

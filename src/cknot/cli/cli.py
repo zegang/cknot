@@ -1,5 +1,6 @@
 import asyncio
-import os
+import time
+import contextvars
 import logging
 from cknot.utils.logging_config import user_id_ctx
 from prompt_toolkit import PromptSession
@@ -9,7 +10,8 @@ from prompt_toolkit.styles import Style
 from prompt_toolkit.key_binding import KeyBindings
 from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.graph.state import CompiledStateGraph
-from rich.console import Console
+from rich.console import Console, Group
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, MofNCompleteColumn
 from rich.markdown import Markdown
 from rich.rule import Rule
 from rich.panel import Panel
@@ -130,7 +132,7 @@ async def dispatch_command(app: CompiledStateGraph, config, user_input: str):
         console.print(Panel(current_node.get_usage(), title=f"Usage: {current_node.name}", border_style="yellow"))
 
 async def _run_interactive_turn(user_input: str, session_id: str, config: dict, app):
-    """Handles a single turn of the interactive CLI, including streaming and interrupts."""
+    """Handles a single turn of the interactive CLI, including streaming, interrupts, and UI updates."""
     # Update config with immutable context
     config["configurable"].update({
         "session_id": session_id,
@@ -144,40 +146,73 @@ async def _run_interactive_turn(user_input: str, session_id: str, config: dict, 
 
     # Internal loop to handle potential interrupts within a single user turn
     while True:
-        response_buffer = ""
+        # Initialize a unified progress bar for all agent tasks
+        task_progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            MofNCompleteColumn(),
+            console=console,
+            transient=True
+        )
+        # Start with an indeterminate "thinking" state
+        main_task_id = task_progress.add_task("[bold magenta]cknot is thinking...", total=None)
+
+        # Initial main content (empty Markdown and progress bar)
+        main_content_group = Group(Markdown(""), task_progress)
+        
+        response_buffer = "" # Buffer for accumulating LLM responses
+
+        step_start_time = time.perf_counter()
+
         try:
             with Live(
-                Markdown(""),
+                main_content_group,
                 console=console,
                 screen=False,
                 refresh_per_second=4
             ) as live_panel:
-                status_ctx = console.status("[bold magenta]cknot is thinking...", spinner="aesthetic", spinner_style="bold magenta")
-                with status_ctx:
-                    async for event in app.astream(current_input, config):
-                        for node, state in event.items():
-                            logger.info(f"Node Transition: {node}")
-                            if node == "cknot" and "messages" in state:
-                                msg = state["messages"][-1]
-                                if isinstance(msg, AIMessage) and msg.content:
-                                    logger.info(f"LangGraph Node: {node}, Message: {msg}")
-                                    response_buffer += msg.content
-                                    live_panel.update(Markdown(response_buffer))
-                                    response_buffer = ""
-                                if msg.tool_calls:
-                                    logger.info(f"LangGraph Node: {node}, Tool Calls: {msg.tool_calls}")
-                                    if response_buffer:
-                                        live_panel.update(Markdown(response_buffer))
-                                    response_buffer = ""
-                            elif "messages" in state:
-                                msg = state["messages"][-1]
-                                if isinstance(msg, AIMessage) and msg.content:
-                                    logger.info(f"LangGraph Node: {node}, AIMessage: {msg}")
-                                    response_buffer += f'Agent {node}: {msg.content}'
-                                    # Ensure the live panel is cleared or updated if it was showing something
-                                    if live_panel.is_started and response_buffer:
-                                        live_panel.update(Markdown(response_buffer))
-                                    response_buffer = ""
+                async for namespace, chunk in app.astream(current_input, config, subgraphs=True):
+                    for node, state in chunk.items():
+                        logger.info(f"Node Transition: {node}")
+                    
+                        now = time.perf_counter()
+                        duration = now - step_start_time
+
+                        # Get progress context directly from the agent/node state
+                        base_desc = state.get("current_progress") or f"Active node: {node}..."
+                        full_desc = f"[bold magenta]{base_desc} [dim]({duration:.2f}s)[/dim]"
+                    
+                        # Generic Deterministic Progress Logic
+                        total = state.get("progress_total")
+                        if total is not None:
+                            task_progress.update(main_task_id, total=total, completed=0, description=full_desc)
+                        elif state.get("progress_increment"):
+                            task_progress.update(main_task_id, description=full_desc)
+                            task_progress.advance(main_task_id)
+                        else:
+                            # Reset to indeterminate mode if the node didn't specify a total
+                            curr_task = task_progress.tasks[0]
+                            update_params = {"description": full_desc}
+                            if curr_task.total is not None:
+                                update_params["total"] = None
+                                update_params["completed"] = 0
+                            task_progress.update(main_task_id, **update_params)
+                        
+                        step_start_time = now
+
+                        if "messages" in state and state["messages"]:
+                            msg = state["messages"][-1]
+                            if isinstance(msg, AIMessage) and msg.content:
+                                if node != "cknot":
+                                    response_buffer += f"\n\n[bold cyan]Agent {node}:[/bold cyan]\n"
+                                response_buffer += msg.content
+                                live_panel.update(Group(Markdown(response_buffer), task_progress))
+                            
+                            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                                if response_buffer:
+                                    live_panel.update(Group(Markdown(response_buffer), task_progress))
         except (KeyboardInterrupt, asyncio.CancelledError):
             if Confirm.ask("\n[bold red]⚠ Interrupt detected. Stop current work?[/bold red]", default=True):
                 console.print("[yellow]Turn aborted.[/yellow]")
@@ -193,7 +228,9 @@ async def _run_interactive_turn(user_input: str, session_id: str, config: dict, 
 
         snapshot = await app.aget_state(config)
         if snapshot.next:
-            next_node = snapshot.next[0]
+            # snapshot.next is a tuple representing the path to the next node(s)
+            next_path = snapshot.next
+            next_node = next_path[0]
             execution_info = f"[bold yellow]{next_node}[/bold yellow]"
 
             # If we are about to enter the tools node, extract the tool calls from the state
@@ -205,6 +242,21 @@ async def _run_interactive_turn(user_input: str, session_id: str, config: dict, 
                     for tc in last_msg.tool_calls:
                         tool_details.append(f"\n  • [cyan]{tc['name']}[/cyan]([italic]{tc['args']}[/italic])")
                     execution_info = f"tools: {''.join(tool_details)}"
+
+            # Handle ArticleWriter sub-graph saver interrupt
+            elif next_node == "article_writer" and "saver" in next_path:
+                path = snapshot.values.get("output_file_path")
+                draft = snapshot.values.get("draft")
+                append_file = snapshot.values.get("append_file", False)
+                mode = "[bold red]Append[/bold red]" if append_file else "[bold green]Overwrite[/bold green]"
+
+                if path:
+                    execution_info = f"[bold cyan]article_writer:saver[/bold cyan]"
+                    execution_info += f"\n  • [cyan]File Path:[/cyan] [italic]{path}[/italic]"
+                    execution_info += f"\n  • [cyan]Mode:[/cyan] {mode}"
+                    if draft:
+                        execution_info += f"\n  • [cyan]Size:[/cyan] {len(draft.encode('utf-8'))} bytes"
+                        execution_info += f"\n  • [cyan]Word Count:[/cyan] {len(draft.split())} words"
 
             console.print(Panel(
                 f"The agent is requesting to execute: {execution_info}",

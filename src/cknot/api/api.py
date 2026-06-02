@@ -199,8 +199,9 @@ async def approve(session_id: str, current_user: Annotated[str, Depends(get_curr
 
         # Verify that the session's user_id matches the authenticated user from config
         config_data = current_state.config.get("configurable", {})
-        if config_data.get("user_id") != current_user:
-            logger.warning(f"User {current_user} attempted to approve session {session_id} owned by {session_owner_id}.")
+        owner_id = config_data.get("user_id")
+        if owner_id != current_user:
+            logger.warning(f"User {current_user} attempted to approve session {session_id} owned by {owner_id}.")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Session {session_id} does not belong to user {current_user}."

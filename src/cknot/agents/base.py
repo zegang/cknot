@@ -188,5 +188,6 @@ class CKnotBaseAgent(BaseModel):
 
         # Ensure we return a dictionary to update the graph state
         return {
-            "messages": [response]
+            "messages": [response],
+            "current_progress": f"{self.name} is working..."
         }

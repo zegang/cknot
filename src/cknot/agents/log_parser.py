@@ -5,15 +5,19 @@ from typing import Optional, List, Union, Dict, Any
 from pydantic import Field
 from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.graph.state import RunnableConfig
+
 from cknot.schemas.state import CknotAgentState
 from cknot.tools.file_ops import read_log_file
-from cknot.agents.system_prompts import LOG_PARSER_PROMPT
 from cknot.agents.base import CKnotBaseAgent
 from cknot.utils.llm_manager import LLMManager
 from cknot.agents.registry import AgentRegistry
 from cknot.schemas.llm_service import LLMService, LLMSelectPolicy
 
 logger = logging.getLogger(__name__)
+
+LOG_PARSER_PROMPT = (
+    "You are a DevOps log expert. Analyze the provided container logs and identify the root cause of any errors."
+)
 
 class LogParserAgent(CKnotBaseAgent):
     """Agent responsible for reading log files and identifying issues."""

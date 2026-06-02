@@ -1,16 +1,16 @@
 import logging
-import time
-import json
 from typing import List, Dict, Any
 from pydantic import Field
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import HumanMessage
 from langgraph.graph.state import RunnableConfig
 from cknot.schemas.state import CknotAgentState
-from cknot.agents.system_prompts import CODE_FIXER_PROMPT
 from cknot.agents.base import CKnotBaseAgent
-from cknot.utils.llm_manager import LLMManager
 
 logger = logging.getLogger(__name__)
+
+CODE_FIXER_PROMPT = (
+    "You are a Senior Software Engineer. Provide a detailed code fix or patch based on the identified issues."
+)
 
 class CodeFixerAgent(CKnotBaseAgent):
     """Agent responsible for proposing code fixes based on identified issues."""
@@ -24,31 +24,12 @@ class CodeFixerAgent(CKnotBaseAgent):
         if not issues or "Error" in issues:
             return {"fix_result": "Cannot fix: No valid issues identified."}
 
-        start_time = time.perf_counter()
-        active_llm = self._select_llm_service(state)
-        if not active_llm:
-            raise ValueError(
-                "The Code Fixer agent has no enabled LLM services. "
-                "Use '/llms' to check status."
-            )
-
-        messages = [
-            SystemMessage(content=self.system_prompt),
+        # Inject the issues into the conversation state for the base ainvoke to pick up
+        temp_state = state.copy()
+        temp_state["messages"] = list(temp_state.get("messages", [])) + [
             HumanMessage(content=f"Identified Issues:\n{issues}")
         ]
-        
-        llm_client = LLMManager().get_llm_service_client(active_llm.id)
-        response = await llm_client.ainvoke(messages)
 
-        # Prepare JSON-style representations for logging
-        req_json = json.dumps([m.dict() for m in messages], indent=2, ensure_ascii=False, default=str)
-        res_json = json.dumps(response.dict(), indent=2, ensure_ascii=False, default=str)
-        log_msg = f"LLM: {active_llm.model_name}\nRequest: {req_json}\nResponse: {res_json}"
-
-        self._log_metrics(start_time, usage=getattr(response, "usage_metadata", None), message=log_msg)
-        
-        response.name = "code_fixer"
-        return {
-            "fix_result": response.content,
-            "messages": [response]
-        }
+        result = await super().ainvoke(temp_state, config)
+        result["fix_result"] = result["messages"][-1].content
+        return result

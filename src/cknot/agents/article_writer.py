@@ -11,17 +11,54 @@ from langgraph.constants import Send
 from langgraph.graph.message import add_messages
 from cknot.schemas.state import CknotAgentState, CKnotConfig
 from cknot.agents.base import CKnotBaseAgent
-from cknot.agents.system_prompts import (
-    ARTICLE_WRITER_PROMPT, ARTICLE_PLANNER_PROMPT, ARTICLE_RESEARCHER_PROMPT,
-    ARTICLE_DRAFTER_PROMPT, ARTICLE_EDITOR_PROMPT, ARTICLE_REFINER_PROMPT,
-    ARTICLE_SUMMARIZER_PROMPT
-)
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, BaseMessage
+from cknot.tools.file_ops import write_file
 from langgraph.prebuilt import ToolNode
 
 logger = logging.getLogger(__name__)
 
 # Context variable to hold the task-local system prompt during parallel execution
+_current_prompt: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("article_writer_prompt", default=None)
+
+ARTICLE_WRITER_PROMPT = (
+    "You are an Elite Content Strategist and Article Writer. You produce authoritative, long-form content.\n"
+    "Your workflow MUST follow these stages:\n"
+    "1. PLANNER: Create a comprehensive outline with headings and sub-points based on the topic.\n"
+    "2. RESEARCHER: Identify key facts, data points, or information needed for each section (use tools if required).\n"
+    "3. DRAFTER: Write the content section-by-section, ensuring consistency with the outline and research findings.\n"
+    "4. EDITOR: Critique the draft for clarity, SEO, and structural integrity.\n"
+    "5. REFINER: Finalize the article by incorporating edits and ensuring it meets high professional standards.\n"
+    "   If the user has not specified a file path to save the article, suggest a suitable filename and ask if they would like to save it locally.\n"
+    "6. SAVER: Use the 'write_file' tool to store or append the final content to a local file if a path is provided.\n"
+    "Explicitly mention which stage you are currently in during the process."
+)
+
+ARTICLE_PLANNER_PROMPT = "You are a Content Planner. Analyze the topic and generate a detailed outline with headings and sub-points."
+
+ARTICLE_RESEARCHER_PROMPT = (
+    "You are a Fact Researcher. For each section of the provided outline, retrieve key data, facts, and "
+    "supporting information using your available tools."
+)
+
+ARTICLE_DRAFTER_PROMPT = (
+    "You are a Content Drafter. Write the full article section-by-section based on the outline and research results. "
+    "Maintain a consistent professional tone."
+)
+
+ARTICLE_EDITOR_PROMPT = "You are a Senior Editor. Critique the draft for flow, clarity, SEO, and factual accuracy. Provide specific feedback for the refiner."
+
+ARTICLE_REFINER_PROMPT = (
+    "You are a Content Refiner. Rewrite the article by strictly following the Editor's critique and polishing the final prose. "
+    "Additionally, if the user has not yet specified a file path to save the article, suggest a suitable filename "
+    "and ask if they would like to save it locally."
+)
+
+ARTICLE_SUMMARIZER_PROMPT = (
+    "You are a Research Synthesizer. You will be provided with multiple research reports for different sections of an article. "
+    "Your task is to consolidate these reports into a single, cohesive summary that highlights the most critical facts, "
+    "data points, and quotes for the drafter. Ensure no information is lost, but remove redundancies."
+)
+
 _current_prompt: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("article_writer_prompt", default=None)
 
 class ArticleWriterState(TypedDict):
@@ -34,6 +71,13 @@ class ArticleWriterState(TypedDict):
     draft: str
     feedback: str
     iteration_count: int
+    total_sections: int
+    output_file_path: Optional[str]
+    current_progress: Optional[str]
+    progress_total: Optional[int]
+    progress_increment: Optional[bool]
+    append_file: bool
+    is_save_only: bool
     agent_summary: Annotated[Dict[str, Dict[str, Any]], operator.ior]
 
 class ArticleWriterAgent(CKnotBaseAgent):
@@ -42,7 +86,7 @@ class ArticleWriterAgent(CKnotBaseAgent):
     Handles planning, research, drafting, editing, and refining.
     """
     system_prompt: str = Field(default=ARTICLE_WRITER_PROMPT)
-    good_at: List[str] = Field(default_factory=lambda: ["complex article writing", "long-form content", "detailed outlines", "editorial review"])
+    good_at: List[str] = Field(default_factory=lambda: ["complex article writing", "long-form content", "detailed outlines", "editorial review", "saving articles to local files"])
     poor_at: List[str] = Field(default_factory=lambda: ["code debugging", "system log analysis", "real-time chat support"])
     refine_counts: int = Field(default=1)
 
@@ -70,7 +114,7 @@ class ArticleWriterAgent(CKnotBaseAgent):
             )
         return full_messages
 
-    def _create_node(self, prompt: str, output_key: Optional[str] = None):
+    def _create_node(self, prompt: str, output_key: Optional[str] = None, progress_desc: Optional[str] = None):
         """Helper to create a node function for a specific phase."""
         async def node(state: ArticleWriterState, config: RunnableConfig):
             section_context = ""
@@ -84,7 +128,10 @@ class ArticleWriterAgent(CKnotBaseAgent):
                 
                 # Prepare the update dictionary
                 last_msg_content = result["messages"][-1].content
-                update = {"messages": result["messages"]}
+                update = {
+                    "messages": result["messages"],
+                    "current_progress": progress_desc or f"{self.name} is working..."
+                }
                 
                 if output_key:
                     update[output_key] = last_msg_content
@@ -120,14 +167,40 @@ class ArticleWriterAgent(CKnotBaseAgent):
         workflow = StateGraph(ArticleWriterState, config_schema=CKnotConfig)
 
         # Define nodes for each stage
-        workflow.add_node("planner", self._create_node(ARTICLE_PLANNER_PROMPT, "outline"))
-        workflow.add_node("summarizer", self._create_node(ARTICLE_SUMMARIZER_PROMPT, "research_data"))
-        workflow.add_node("drafter", self._create_node(ARTICLE_DRAFTER_PROMPT, "draft"))
-        workflow.add_node("editor", self._create_node(ARTICLE_EDITOR_PROMPT, "feedback"))
+        async def planner_node(state: ArticleWriterState, config: RunnableConfig):
+            token = _current_prompt.set(ARTICLE_PLANNER_PROMPT)
+            try:
+                result = await self.ainvoke(state, config)
+                last_msg_content = result["messages"][-1].content
+                # Calculate total sections for progress tracking
+                sections = re.findall(r'(?:^|\n)(?:\d+\.|\#+)\s*(.*)', last_msg_content)
+                total = len(sections) if sections else 1
+                return {
+                    "messages": result["messages"],
+                    "outline": last_msg_content,
+                    "total_sections": total,
+                    "progress_total": total,
+                    "current_progress": "Planning article structure..."
+                }
+            finally:
+                _current_prompt.reset(token)
+
+        workflow.add_node("planner", planner_node)
+
+        async def summarizer_node(state: ArticleWriterState, config: RunnableConfig):
+            node_func = self._create_node(ARTICLE_SUMMARIZER_PROMPT, progress_desc="Synthesizing research...")
+            result = await node_func(state, config)
+            return {
+                "messages": result["messages"],
+                "research_data": {"consolidated": result["messages"][-1].content}
+            }
+        workflow.add_node("summarizer", summarizer_node)
+        workflow.add_node("drafter", self._create_node(ARTICLE_DRAFTER_PROMPT, "draft", "Drafting content..."))
+        workflow.add_node("editor", self._create_node(ARTICLE_EDITOR_PROMPT, "feedback", "Reviewing draft..."))
 
         # Specialized Refiner node to increment iteration_count
         async def refiner_node(state: ArticleWriterState, config: RunnableConfig):
-            node_func = self._create_node(ARTICLE_REFINER_PROMPT, "draft")
+            node_func = self._create_node(ARTICLE_REFINER_PROMPT, "draft", "Refining prose...")
             result = await node_func(state, config)
             result["iteration_count"] = state.get("iteration_count", 0) + 1
             return result
@@ -142,10 +215,13 @@ class ArticleWriterAgent(CKnotBaseAgent):
             try:
                 # invoke the LLM logic
                 result = await self.ainvoke(state, config)
+                logger.info(f"Research task completed for section: {section_name}")
                 # Return data to be merged into ArticleWriterState via Annotated operators
                 return {
                     "research_data": {section_name: result["messages"][-1].content},
-                    "messages": result["messages"]
+                    "messages": result["messages"],
+                    "current_progress": f"Researched: {section_name}",
+                    "progress_increment": True
                 }
             finally:
                 _current_prompt.reset(token)
@@ -153,8 +229,38 @@ class ArticleWriterAgent(CKnotBaseAgent):
         workflow.add_node("researcher", researcher_node)
         workflow.add_node("writer_tools", ToolNode(self.tools))
 
+        async def saver_node(state: ArticleWriterState, config: RunnableConfig):
+            """Stage 6: SAVER - Automatically saves the draft if a path is detected."""
+            path = state.get("output_file_path")
+            if path and state.get("draft"):
+                result = write_file.invoke({"file_path": path, "content": state["draft"], "append": state.get("append_file", False)})
+                return {
+                    "messages": [AIMessage(content=f"STAGE 6: SAVER\n{result}")],
+                    "current_progress": "Saving to file..."
+                }
+            return {"messages": [AIMessage(content="STAGE 6: SAVER\nNo output path provided. Skipping.")]}
+
+        workflow.add_node("saver", saver_node)
+
+        async def save_confirmation_node(state: ArticleWriterState, config: RunnableConfig):
+            """Stage 6.1: PRE-SAVER - Asks for confirmation."""
+            path = state.get("output_file_path")
+            return {
+                "messages": [AIMessage(content=f"Article finalized. I am ready to save it to `{path}`. Please authorize to proceed.")],
+                "current_progress": "Awaiting authorization..."
+            }
+
+        workflow.add_node("save_confirmation", save_confirmation_node)
+
         async def final_summarizer_node(state: ArticleWriterState, config: RunnableConfig):
             """Generates a summary of the draft to return to the main graph."""
+            # Calculate research progress percentage based on completed sections
+            outline = state.get("outline", "")
+            sections = re.findall(r'(?:^|\n)(?:\d+\.|\#+)\s*(.*)', outline)
+            total_expected = len(sections) if sections else 1
+            completed_count = len(state.get("research_data", {}))
+            progress_pct = min(100.0, (completed_count / total_expected) * 100)
+
             prompt = f"Summarize the following article in two sentences:\n\n{state['draft']}"
             # Re-use the agent's LLM to generate the summary
             result = await self.ainvoke({"messages": [HumanMessage(content=prompt)]}, config)
@@ -164,7 +270,9 @@ class ArticleWriterAgent(CKnotBaseAgent):
                     "article_writer": {
                         "content": summary, 
                         "status": "SUCCESS",
-                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "progress": f"{progress_pct:.1f}%",
+                        "current_progress": "Finalizing report..."
                     }
                 }
             }
@@ -174,17 +282,49 @@ class ArticleWriterAgent(CKnotBaseAgent):
         # Define internal transitions
         async def init_node(state: ArticleWriterState):
             # Initialize the specialized state fields
-            # Look for the actual user request in the message history
+            human_msgs = [m for m in state["messages"] if isinstance(m, HumanMessage)]
             topic = state.get("topic")
             if not topic:
-                human_msgs = [m for m in state["messages"] if isinstance(m, HumanMessage)]
                 topic = human_msgs[-1].content if human_msgs else "General Topic"
             
-            return {"topic": topic, "iteration_count": 0, "research_data": {}}
+            # Extract output path if mentioned in the prompt (e.g., "save to article.md" or "file: test.txt")
+            path = None
+            append_file = False
+            if human_msgs:
+                content = human_msgs[-1].content
+                # Check for append intent first
+                append_match = re.search(r'append\s+(?:to|as|at)?\s*([^\s]+\.[a-zA-Z0-9]+)', content, re.IGNORECASE)
+                save_match = re.search(r'(?:save\s+(?:to|as)|file:)\s*([^\s]+\.[a-zA-Z0-9]+)', content, re.IGNORECASE)
+
+                if append_match:
+                    path = append_match.group(1)
+                    append_file = True
+                elif save_match:
+                    path = save_match.group(1)
+            
+            # Optimization: If we already have a draft and the user just provided a save path, skip directly to saving.
+            is_save_only = False
+            if state.get("draft") and path:
+                 # Check if the last human message was primarily about saving
+                 last_msg = human_msgs[-1].content.lower() if human_msgs else ""
+                 if any(keyword in last_msg for keyword in ["save", "append", "file:"]):
+                     is_save_only = True
+            
+            return {
+                "topic": topic, "iteration_count": 0, "research_data": {}, 
+                "output_file_path": path, "append_file": append_file,
+                "is_save_only": is_save_only
+            }
 
         workflow.add_node("init", init_node)
         workflow.set_entry_point("init")
-        workflow.add_edge("init", "planner")
+
+        def init_router(state: ArticleWriterState):
+            if state.get("is_save_only"):
+                return "save_confirmation"
+            return "planner"
+
+        workflow.add_conditional_edges("init", init_router)
 
         # Transition from Planner to Researcher uses the Map-Reduce pattern (Send)
         workflow.add_conditional_edges("planner", self._map_research_tasks, ["researcher"])
@@ -205,11 +345,15 @@ class ArticleWriterAgent(CKnotBaseAgent):
         def editor_router(state: ArticleWriterState):
             # Check loop exit conditions
             if state.get("iteration_count", 0) >= self.refine_counts or "APPROVED" in state.get("feedback", "").upper():
+                if state.get("output_file_path"):
+                    return "save_confirmation"
                 return "final_summarizer"
             return "refiner"
 
         workflow.add_conditional_edges("editor", editor_router)
         workflow.add_edge("refiner", "editor") # Loop back for editorial review
+        workflow.add_edge("save_confirmation", "saver")
+        workflow.add_edge("saver", "final_summarizer")
         workflow.add_edge("final_summarizer", END)
 
         return workflow.compile()

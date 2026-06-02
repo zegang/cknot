@@ -16,7 +16,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.redis import AsyncRedisSaver
 from cknot.schemas.state import CknotAgentState, CKnotConfig
 from cknot.tools.web_search import web_search
-from cknot.tools.file_ops import read_log_file
+from cknot.tools.file_ops import read_log_file, write_file
 from cknot.tools.log_analysis import LogSearchTool # Assuming this is still a function-based tool
 from cknot.agents.registry import AgentRegistry
 from langgraph.prebuilt import ToolNode
@@ -41,6 +41,7 @@ class GraphOrchestrator:
         """Registers and retrieves all system tools."""
         self.tool_manager.register_tool_instance("web_search", web_search)
         self.tool_manager.register_tool_instance("read_log_file", read_log_file)
+        self.tool_manager.register_tool_instance("write_file", write_file)
         self.tool_manager.register_tool_instance("wikipedia", WikipediaQueryRun(api_wrapper=WikipediaAPIWrapper()))
         self.tool_manager.register_tool_instance("log_search", LogSearchTool())
         self.tools = self.tool_manager.get_runnable_tools()
