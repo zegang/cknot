@@ -15,8 +15,8 @@ CODE_FIXER_PROMPT = (
 class CodeFixerAgent(CKnotBaseAgent):
     """Agent responsible for proposing code fixes based on identified issues."""
     system_prompt: str = Field(default=CODE_FIXER_PROMPT)
-    good_at: List[str] = Field(default_factory=lambda: ["code fixing", "patching", "software engineering", "refactoring"])
-    poor_at: List[str] = Field(default_factory=lambda: ["log parsing", "web search", "internet research"])
+    expert_in: List[str] = Field(default_factory=lambda: ["code fixing", "patching", "software engineering", "refactoring"])
+    avoid_for: List[str] = Field(default_factory=lambda: ["log parsing", "web search", "internet research"])
 
     async def ainvoke(self, state: CknotAgentState, config: RunnableConfig) -> Dict[str, Any]:
         """Asynchronous execution for the code fixer."""

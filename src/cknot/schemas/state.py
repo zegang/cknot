@@ -12,9 +12,7 @@ class CknotAgentState(TypedDict):
     output_file_path: Optional[str]
     draft: Optional[str]
     append_file: Optional[bool]
-    current_progress: Optional[str]
-    progress_total: Optional[int]
-    progress_increment: Optional[bool]
+    progress_report: Annotated[Dict[str, Dict[str, Any]], operator.ior]
     agent_summary: Annotated[Dict[str, Dict[str, Any]], operator.ior]
 
 class CKnotConfig(TypedDict):

@@ -20,8 +20,8 @@ class DeepSearchAgent(CKnotBaseAgent):
     """Dedicated agent for deep internet research and analysis."""
     system_prompt: str = Field(default=DEEP_SEARCH_PROMPT)
     tools: List[Any] = Field(default_factory=lambda: [web_search])
-    good_at: List[str] = Field(default_factory=lambda: ["deep internet research", "web searching", "latest news", "public data"])
-    poor_at: List[str] = Field(default_factory=lambda: ["local file access", "private database analysis", "code execution"])
+    expert_in: List[str] = Field(default_factory=lambda: ["deep internet research", "web searching", "latest news", "public data"])
+    avoid_for: List[str] = Field(default_factory=lambda: ["local file access", "private database analysis", "code execution"])
 
     async def ainvoke(
         self,

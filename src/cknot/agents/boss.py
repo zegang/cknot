@@ -18,10 +18,10 @@ logger = logging.getLogger(__name__)
 
 CKNOT_BOSS_PROMPT = (
     "You are 'cknot', the central orchestrator. Your primary responsibility is task triage and delegation.\n\n"
-    "1. ANALYZE: Review the user's input and compare it against the 'Good at' capabilities in your Team Directory.\n"
-    "2. DELEGATE: If a specialist is better suited for the task, delegate immediately by including their specific 'TRIGGER' keyword. Briefly explain that you are calling a specialist, then include the keyword.\n"
-    "3. LOGS/DEBUG: If the task involves log analysis or debugging, you MUST include 'TRIGGER_LOG_ANALYSIS'.\n"
-    "4. DIRECT ACTION: If no specialist matches, or if you can solve it with your own tools/knowledge, respond directly.\n\n"
+    "1. ANALYZE: Review the user's input and compare it against the 'Expert in' capabilities in your Team Directory.\n"
+    "2. DELEGATE: If a specialist is better suited for the task, delegate immediately by including the phrase 'Agent [AgentName]'. "
+        "Briefly explain that you are calling a specialist, then include the phrase.\n"
+    "3. DIRECT ACTION: If no specialist matches, you can solve it with your own tools/knowledge while noting no specialist was called.\n\n"
     "Maintain a professional, authoritative, and efficient persona."
 )
 
@@ -38,21 +38,12 @@ class CKnotBossAgent(CKnotBaseAgent):
         team_manifest = "\n\nTEAM DIRECTORY & DELEGATION PROTOCOL:\n"
         for agent in self.sub_agents:
             name = agent.__class__.__name__
-            good = ", ".join(agent.good_at) if agent.good_at else "General tasks"
-            poor = ", ".join(agent.poor_at) if agent.poor_at else "None specified"
+            good = ", ".join(agent.expert_in) if agent.expert_in else "General tasks"
+            poor = ", ".join(agent.avoid_for) if agent.avoid_for else "None specified"
             
-            # Ensure triggers match the hardcoded logic in orchestrator.py should_continue
-            if "DeepSearch" in name:
-                trigger = "TRIGGER_DEEP_SEARCH"
-            elif "LogParser" in name:
-                trigger = "TRIGGER_LOG_ANALYSIS"
-            elif "ArticleWriter" in name:
-                trigger = "TRIGGER_ARTICLE_WRITING"
-            else:
-                trigger = f"TRIGGER_{name.upper()}"
-            
+            trigger = f"Agent {name}"
             team_manifest += f"- {name}: Expert in [{good}]. Avoid for [{poor}].\n"
-            team_manifest += f"  TO DELEGATE: You must include the keyword '{trigger}' in your response.\n"
+            team_manifest += f"  TO DELEGATE: You must include the phrase '{trigger}' in your response.\n"
 
         # Inject summaries from specialists if any exist in the state
         agent_summaries = state.get("agent_summary", {}) if isinstance(state, dict) else getattr(state, "agent_summary", {})
@@ -126,13 +117,22 @@ class CKnotBossAgent(CKnotBaseAgent):
             else:
                 final_chunk += chunk
 
+            usage = getattr(chunk, "usage_metadata", None)
+            total_tokens = usage.get("total_tokens", 0) if usage else 0
             # Only yield chunks with content or tool calls to the graph state.
             # Trailing empty metadata chunks can cause routing logic to fail if they 
             # are treated as the 'last message' in a non-merging scenario.
             if chunk.content or chunk.tool_calls:
                 yield {
                     "messages": [chunk],
-                    "current_progress": "cknot is thinking..."
+                    "progress_report": {
+                        "cknot": {
+                            "step": "TRIAGE",
+                            "description": "cknot is thinking...",
+                            "percentage": 0.0,
+                            "total_tokens": total_tokens
+                        }
+                    }
                 }
 
         # Extract usage from the aggregated message if available

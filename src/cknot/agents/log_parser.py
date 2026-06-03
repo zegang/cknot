@@ -22,8 +22,8 @@ LOG_PARSER_PROMPT = (
 class LogParserAgent(CKnotBaseAgent):
     """Agent responsible for reading log files and identifying issues."""
     system_prompt: str = Field(default=LOG_PARSER_PROMPT)
-    good_at: List[str] = Field(default_factory=lambda: ["log analysis", "root cause identification", "DevOps debugging", "container logs"])
-    poor_at: List[str] = Field(default_factory=lambda: ["writing code", "web search", "user interaction"])
+    expert_in: List[str] = Field(default_factory=lambda: ["log analysis", "root cause identification", "DevOps debugging", "container logs"])
+    avoid_for: List[str] = Field(default_factory=lambda: ["writing code", "web search", "user interaction"])
 
     async def ainvoke(self, state: CknotAgentState, config: RunnableConfig) -> Dict[str, Any]:
         """Asynchronous execution for the log parser."""

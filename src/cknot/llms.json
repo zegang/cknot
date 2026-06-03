@@ -14,5 +14,14 @@
     "model_name": "Qwen/Qwen3-0.6B",
     "base_url": "http://localhost:8000/v1",
     "enabled": true
+  },
+  {
+    "id": "default-embadding",
+    "name": "all-minilm",
+    "provider": "ollama",
+    "model_name": "all-minilm",
+    "base_url": "http://localhost:8000/v1",
+    "service_type": "embadding",
+    "enabled": true
   }
 ]

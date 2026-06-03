@@ -19,6 +19,9 @@ from rich.table import Table
 from rich.rule import Rule
 from rich.panel import Panel
 from rich.live import Live
+from rich.progress_bar import ProgressBar
+from rich.spinner import Spinner
+from rich.columns import Columns
 from .utils import clear_lines
 from rich.prompt import Confirm
 from .commands import COMMAND_REGISTRY
@@ -45,37 +48,73 @@ _confirmation_result: Optional[str] = None
 _current_status: str = ""
 _progress_total: Optional[int] = None
 _progress_completed: int = 0
+_current_percentage: float = 0.0
+_agent_progress_reports: Dict[str, Dict[str, Any]] = {}
 
 def get_progress_renderable(agent_output: str = ""):
     """Generates the animated progress text with simulated interactive tabs for the bottom panel."""
-    frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-    frame = frames[int(time.time() * 10) % len(frames)]
+    # Dynamically determine pipeline stages and the active stage from agent progress reports
+    pipeline_stages = []
+    active_stage = None
+    for info in _agent_progress_reports.values():
+        step = info.get("step")
+        if step:
+            if step not in pipeline_stages:
+                pipeline_stages.append(step)
+            if info.get("status") != "done":
+                active_stage = step
     
-    stages = ["TRIAGE", "PLANNING", "RESEARCH", "WRITING", "SAVING"]
-    status_lower = _current_status.lower()
+    if not active_stage and pipeline_stages:
+        active_stage = pipeline_stages[-1]
+
+    # Calculate overall percentage
+    if _progress_total and _progress_total > 0:
+        overall_pct = (_progress_completed / _progress_total) * 100
+    else:
+        overall_pct = _current_percentage
+
     tab_elements = []
-    
-    for s in stages:
-        is_active = False
-        if s == "TRIAGE" and ("cknot" in status_lower or "initializing" in status_lower): is_active = True
-        elif s == "PLANNING" and "plann" in status_lower: is_active = True
-        elif s == "RESEARCH" and ("search" in status_lower or "research" in status_lower): is_active = True
-        elif s == "WRITING" and ("writer" in status_lower or "draft" in status_lower or "refin" in status_lower or "edit" in status_lower): is_active = True
-        elif s == "SAVING" and "sav" in status_lower: is_active = True
-        
-        style = "reverse bold magenta" if is_active else "dim"
+    for s in pipeline_stages:
+        style = "reverse bold magenta" if s == active_stage else "dim"
         tab_elements.append(f"[{style}] {s} [/{style}]")
+
+    # Aggregate tokens and calculate cost estimate ($0.02 per 1k tokens)
+    total_tokens = sum(info.get("total_tokens", 0) for info in _agent_progress_reports.values())
+    cost_estimate = (total_tokens / 1000) * 0.02
+    token_info = f"[dim]Tokens:[/dim] [bold yellow]{total_tokens}[/bold yellow] "
+    cost_info = f"[dim]Est. Cost:[/dim] [bold green]${cost_estimate:.4f}[/bold green]"
 
     progress_str = f" [{_progress_completed}/{_progress_total}]" if _progress_total else ""
     tab_line = " ".join(tab_elements)
 
-    # Create the accumulating response display
-    response_display = Markdown(agent_output) if agent_output.strip() else Text("Agent is processing...", style="dim")
+    # Build the progress overview from the structured reports
+    progress_details = []
+    if _agent_progress_reports:
+        for node_id, info in _agent_progress_reports.items():
+            desc = info.get("description", "Working...")
+            step = info.get("step", "TASK")
+            progress_details.append(f"[dim]•[/dim] [bold cyan]{step}[/bold cyan]: {desc}")
+    else:
+        progress_details.append(f"[bold magenta]{_current_status}[/bold magenta]{progress_str}")
+
+    detail_text = "\n".join(progress_details[-3:]) # Show last 3 active progress lines
+
+    # 2. Process content
+    display_content = Markdown(agent_output) if agent_output.strip() else Text("Agent is processing...", style="dim")
+
+    # Create the progress bar
+    progress_bar = ProgressBar(total=100, completed=min(100, overall_pct), width=None)
 
     return Group(
         Rule(style="dim cyan"),
-        Panel(response_display, title="[bold cyan]Agent Output[/bold cyan]", border_style="dim cyan", padding=(1, 2)),
-        Text.from_markup(f"{tab_line}  {frame} [bold magenta]{_current_status}[/bold magenta]{progress_str}"),
+        Panel(display_content, title="[bold cyan]Agent Output[/bold cyan]", border_style="dim cyan", padding=(1, 2)),
+        Columns([
+            Text.from_markup(f"{tab_line} "), 
+            Spinner("dots", style="bold magenta"), 
+            Text.from_markup(f"  {token_info} {cost_info}")
+        ], expand=False),
+        progress_bar,
+        Text.from_markup(detail_text),
         Rule(style="dim magenta")
     )
 
@@ -165,12 +204,13 @@ async def dispatch_command(app: CompiledStateGraph, config, user_input: str):
 
 async def _run_interactive_turn(user_input: str, session_id: str, config: dict, app, live: Optional[Live] = None):
     """Handles a single turn of the interactive CLI, including streaming, interrupts, and UI updates."""
-    global _current_status, _progress_total, _progress_completed
+    global _current_status, _progress_total, _progress_completed, _agent_progress_reports
     
     # Initialize/Reset status for the new turn
     _current_status = "Initializing..."
     _progress_total = None
     _progress_completed = 0
+    _current_percentage = 0.0
 
     # Update config with immutable context
     config["configurable"].update({
@@ -189,50 +229,51 @@ async def _run_interactive_turn(user_input: str, session_id: str, config: dict, 
         step_start_time = time.perf_counter()
         last_node = None
         try:
-            if live:
-                live.update(get_progress_renderable(agent_response_buffer), refresh=True)
-                
             async for namespace, chunk in app.astream(current_input, config, subgraphs=True):
                 for node, state in chunk.items():
-                    logger.info(f"Node Transition: {node}")
-                
-                    now = time.perf_counter()
-                    duration = now - step_start_time
+                    if node != last_node:
+                        logger.info(f"Node Transition: {node}")
+                        now = time.perf_counter()
+                        duration = now - step_start_time
 
-                    # Update progress tracking state
-                    base_desc = state.get("current_progress") or f"Active node: {node}..."
-                    _current_status = f"{base_desc} ({duration:.2f}s)"
-                
-                    total = state.get("progress_total")
-                    if total is not None:
-                        _progress_total = total
-                        _progress_completed = 0
-                    elif state.get("progress_increment"):
-                        _progress_completed += 1
-                    else:
-                        _progress_total = None
+                        # 1. Update legacy tracking
+                        _current_status = f"Active node: {node}..."
+
+                        # 2. Update new structured tracking
+                        reports = state.get("progress_report") if isinstance(state, dict) else None
+                        if reports and isinstance(reports, dict):
+                            _agent_progress_reports.update(reports)
+                            
+                            # Extract status and total from reports if available
+                            for info in reports.values():
+                                if isinstance(info, dict) and "description" in info:
+                                    _current_status = info["description"]
+                                if "total" in info:
+                                    _progress_total = info["total"]
+                                    _progress_completed = 0
+                                if "percentage" in info:
+                                    _current_percentage = info["percentage"]
+                        
+                        step_start_time = now
+                        last_node = node
                     
-                    if "messages" in state and state["messages"]:
+                    # Handle progress increments (Legacy and Structured)
+                    has_increment = False
+                    if isinstance(state, dict):
+                        reports = state.get("progress_report")
+                        if not has_increment and reports:
+                            has_increment = any(info.get("current", 0) > 0 for info in reports.values() if isinstance(info, dict))
+                            
+                        if has_increment:
+                            _progress_completed += 1
+
+                    if isinstance(state, dict) and "messages" in state and state["messages"]:
                         msg = state["messages"][-1]
                         if isinstance(msg, AIMessage) and msg.content:
-                            # Clean output: remove internal triggers and mangled escape hallucinations
-                            display_text = re.sub(r'TRIGGER_[A-Z_]+', '', msg.content)
-                            # Also clean mangled ANSI if they appear
-                            display_text = re.sub(r'(?:\\x1b|\\033|u001b|\?)\[[0-9;]*[mK]', '', display_text)
-
-                            # Accumulate content for the live panel
-                            agent_response_buffer += display_text
-
-                            if node != last_node:
-                                last_node = node
-                        
-                        if hasattr(msg, "tool_calls") and msg.tool_calls:
-                            pass
-                        
-                        if live:
-                            live.update(get_progress_renderable(agent_response_buffer), refresh=True)
-                    
-                    step_start_time = now
+                            agent_response_buffer += msg.content
+                
+                if live:
+                    live.update(get_progress_renderable(agent_response_buffer))
 
             if agent_response_buffer:
                 console.print(Markdown(agent_response_buffer))
@@ -302,6 +343,10 @@ async def run_cli_loop(app: CompiledStateGraph, config, session_id: str):
     session = PromptSession(completer=CKnotCompleter(), complete_while_typing=True, key_bindings=kb)
 
     global _active_task, _confirmation_result
+    
+    # Reset progress tracking at the start of the CLI loop
+    _agent_progress_reports.clear()
+    _current_percentage = 0.0
 
     while True:
         try:
@@ -358,9 +403,9 @@ async def run_cli_loop(app: CompiledStateGraph, config, session_id: str):
             continue
 
         # Start new turn in the background
-        # Set auto_refresh=False to disable the background refresh thread. 
-        # We will manually update the display in _run_interactive_turn using refresh=True.
-        live = Live(get_progress_renderable(""), console=console, auto_refresh=False, transient=True)
+        # Using refresh_per_second enables the internal animation thread.
+        # Using 4Hz is enough for spinners and reduces flicker with patch_stdout.
+        live = Live(get_progress_renderable(""), console=console, refresh_per_second=4, transient=True)
         live.start()
 
         def _task_done_callback(fut):

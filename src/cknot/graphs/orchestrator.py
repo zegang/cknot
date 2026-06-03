@@ -1,5 +1,6 @@
 import os
 import logging
+import re
 from typing import Dict, List, Any, Optional
 from redis.asyncio import Redis as AsyncRedis
 from cknot.agents.boss import CKnotBossAgent
@@ -62,11 +63,11 @@ class GraphOrchestrator:
         )
 
         self.agents = {
-            "cknot": boss,
-            "deep_search": deep_search,
-            "log_parser": log_parser,
-            "code_fixer": code_fixer,
-            "article_writer": article_writer
+            boss.name: boss,
+            deep_search.name: deep_search,
+            log_parser.name: log_parser,
+            code_fixer.name: code_fixer,
+            article_writer.name: article_writer
         }
 
         for agent in self.agents.values():
@@ -82,13 +83,12 @@ class GraphOrchestrator:
         if getattr(last_message, "tool_calls", None):
             return "tools"
             
-        content = last_message.content.upper() if last_message.content else ""
-        if "TRIGGER_LOG_ANALYSIS" in content:
-            return "log_parser"
-        if "TRIGGER_DEEP_SEARCH" in content:
-            return "deep_search"
-        if "TRIGGER_ARTICLE_WRITING" in content:
-            return "article_writer"
+        content = last_message.content if last_message.content else ""
+        # Match the new delegation format: "Agent [AgentName]"
+        match = re.search(r'Agent\s+(\w+)', content, re.IGNORECASE)
+        if match:
+            return match.group(1)
+
         return END
 
     @staticmethod
@@ -105,24 +105,31 @@ class GraphOrchestrator:
 
         workflow = StateGraph(CknotAgentState, config_schema=CKnotConfig)
 
-        # Define node functions using agent ainvoke methods
-        workflow.add_node("cknot", self.agents["cknot"].ainvoke)
-        workflow.add_node("log_parser", self.agents["log_parser"].ainvoke)
-        workflow.add_node("code_fixer", self.agents["code_fixer"].ainvoke)
-        workflow.add_node("deep_search", self.agents["deep_search"].ainvoke)
-        workflow.add_node("article_writer", self.agents["article_writer"].get_subgraph())
+        # Use agent names for node identifiers to match delegation triggers
+        boss_name = self.agents["cknot"].name
+        log_parser_name = self.agents["LogParserAgent"].name
+        code_fixer_name = self.agents["CodeFixerAgent"].name
+        deep_search_name = self.agents["DeepSearchAgent"].name
+        article_writer_name = self.agents["ArticleWriterAgent"].name
+
+        # Define node functions using agent dynamic names
+        workflow.add_node(boss_name, self.agents[boss_name].ainvoke)
+        workflow.add_node(log_parser_name, self.agents[log_parser_name].ainvoke)
+        workflow.add_node(code_fixer_name, self.agents[code_fixer_name].ainvoke)
+        workflow.add_node(deep_search_name, self.agents[deep_search_name].ainvoke)
+        workflow.add_node(article_writer_name, self.agents[article_writer_name].get_subgraph())
         workflow.add_node("tools", ToolNode(self.tools))
 
         # Define graph flow
-        workflow.set_entry_point("cknot")
-        workflow.add_conditional_edges("cknot", self._boss_router)
-        workflow.add_edge("tools", "cknot")
-        workflow.add_edge("log_parser", "code_fixer")
-        workflow.add_edge("code_fixer", END)
-        workflow.add_conditional_edges("deep_search", self._search_router)
+        workflow.set_entry_point(boss_name)
+        workflow.add_conditional_edges(boss_name, self._boss_router)
+        workflow.add_edge("tools", boss_name)
+        workflow.add_edge(log_parser_name, code_fixer_name)
+        workflow.add_edge(code_fixer_name, END)
+        workflow.add_conditional_edges(deep_search_name, self._search_router)
         
         # After the sub-graph finishes, it returns to the Boss for final delivery
-        workflow.add_edge("article_writer", "cknot")
+        workflow.add_edge(article_writer_name, boss_name)
 
         # Initialize persistence
         if settings.CHECKPOINTER_TYPE == "redis":
@@ -133,7 +140,7 @@ class GraphOrchestrator:
 
         return workflow.compile(
             checkpointer=memory,
-            interrupt_before=["tools", "log_parser", "deep_search"]
+            interrupt_before=["tools"]
         )
 
     def visualize_ascii(self):

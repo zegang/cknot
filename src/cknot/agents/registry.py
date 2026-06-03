@@ -53,8 +53,8 @@ class AgentRegistry:
             "name": name,
             "class": agent.__class__.__name__,
             "system_prompt": agent.system_prompt,
-            "good_at": agent.good_at,
-            "poor_at": agent.poor_at,
+            "expert_in": agent.expert_in,
+            "avoid_for": agent.avoid_for,
             "llm_select_policy": agent.llm_select_policy.value,
             "llm_services": [s.id for s in agent.llm_services],
             "tools": [getattr(t, "name", str(t)) for t in agent.tools]
@@ -86,8 +86,8 @@ class AgentRegistry:
                 
                 dummy = agent_class(**kwargs)
                 capabilities[name] = {
-                    "good_at": getattr(dummy, "good_at", []),
-                    "poor_at": getattr(dummy, "poor_at", [])
+                    "expert_in": getattr(dummy, "expert_in", []),
+                    "avoid_for": getattr(dummy, "avoid_for", [])
                 }
             except Exception as e:
                 logger.debug(f"Failed to retrieve capabilities for {name}: {e}")

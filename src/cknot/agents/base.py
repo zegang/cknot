@@ -2,6 +2,7 @@ import time
 import random
 import json
 import logging
+import re
 from typing import List, Optional, Any, Dict, Union
 import uuid
 from pydantic import BaseModel, Field, PrivateAttr, ConfigDict
@@ -20,15 +21,14 @@ class CKnotBaseAgent(BaseModel):
     Base class for all CKnot agents.
     Encapsulates system prompt management and standardized LLM invocation logic.
     """
+    agent_id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="Unique technical identifier for the agent.")
     name: str = Field(default="")
     system_prompt: str = Field(default="")
     llm_services: List[LLMService] = Field(default_factory=list)
     llm_select_policy: LLMSelectPolicy = Field(default=LLMSelectPolicy.FIRST)
-    good_at: List[str] = Field(default_factory=list)
-    poor_at: List[str] = Field(default_factory=list)
+    expert_in: List[str] = Field(default_factory=list)
+    avoid_for: List[str] = Field(default_factory=list)
     tools: List[Any] = Field(default_factory=list)
-    
-    _uuid: str = PrivateAttr(default_factory=lambda: str(uuid.uuid4()))
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -48,10 +48,10 @@ class CKnotBaseAgent(BaseModel):
                 HumanMessage(content="I am ready to help. Please provide your instructions or ask a question.")
             ]
 
-        # Filter out routing keywords (Boss delegation chatter) to prevent LLM confusion
+        # Filter out routing keywords (Boss delegation: "Agent [Name]") to prevent LLM confusion
         filtered_history = [
             m for m in current_messages 
-            if not (isinstance(m, AIMessage) and "TRIGGER_" in m.content)
+            if not (isinstance(m, AIMessage) and re.search(r'Agent\s+\w+', m.content))
         ]
 
         # Best Practice: Ensure the conversation ends with a HumanMessage to prompt the LLM.
@@ -78,7 +78,7 @@ class CKnotBaseAgent(BaseModel):
             usage_str = f" | Tokens: {total_tokens} (In: {input_tokens}, Out: {output_tokens})"
 
         logger.debug(
-            f"Agent {self.name} ({self._uuid[:8]}) {mode} took {duration:.4f} seconds.{usage_str}"
+            f"Agent {self.name} ({self.agent_id[:8]}) {mode} took {duration:.4f} seconds.{usage_str}"
         )
         if message:
             logger.debug(message)
@@ -86,17 +86,17 @@ class CKnotBaseAgent(BaseModel):
     def add_llm_service(self, service: LLMService):
         """Adds an LLM service to the agent's internal registry."""
         if not service:
-            logger.debug(f'Invalid LLM service to add to agent {self.name} ({self._uuid[:8]}).')
+            logger.debug(f'Invalid LLM service to add to agent {self.name} ({self.agent_id[:8]}).')
             return
         self.llm_services.append(service)
-        logger.debug(f"LLM service '{service.id}' added to agent {self.name} ({self._uuid[:8]}).")
+        logger.debug(f"LLM service '{service.id}' added to agent {self.name} ({self.agent_id[:8]}).")
 
     def remove_llm_service(self, service_id: str):
         """Removes an LLM service from the agent's internal registry."""
         initial_count = len(self.llm_services)
         self.llm_services = [s for s in self.llm_services if s.id != service_id]
         if len(self.llm_services) < initial_count:
-            logger.debug(f"LLM service '{service_id}' removed from agent {self.name} ({self._uuid[:8]}).")
+            logger.debug(f"LLM service '{service_id}' removed from agent {self.name} ({self.agent_id[:8]}).")
 
     def _select_llm_service(self, state: CknotAgentState) -> Optional[LLMService]:
         """
@@ -168,7 +168,7 @@ class CKnotBaseAgent(BaseModel):
 
         # Generate a stable ID for logging consistency
         turn_id = str(uuid.uuid4())
-        logger.debug(f"Agent {self.name} ({self._uuid[:8]}) invoking LLM {active_llm.model_name} with turn_id: {turn_id}")
+        logger.debug(f"Agent {self.name} ({self.agent_id[:8]}) invoking LLM {active_llm.model_name} with turn_id: {turn_id}")
         response = await llm_svc_client_with_tools.ainvoke(messages)
         response.id = turn_id
 
@@ -187,7 +187,16 @@ class CKnotBaseAgent(BaseModel):
         )
 
         # Ensure we return a dictionary to update the graph state
+        total_tokens = usage.get("total_tokens", 0) if usage else 0
         return {
             "messages": [response],
-            "current_progress": f"{self.name} is working..."
+            "progress_report": {
+                self.name.lower(): {
+                    "step": "WORKING",
+                    "description": f"{self.name} is working...",
+                    "status": "done",
+                    "percentage": 100.0,
+                    "total_tokens": total_tokens
+                }
+            }
         }
