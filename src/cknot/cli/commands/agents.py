@@ -28,12 +28,12 @@ async def handle_agents_list(app: CompiledStateGraph, config, console, args):
 
     table = Table(title="Agent Registry", border_style="cyan", header_style="bold cyan")
     table.add_column("Agent ID", style="bold cyan")
-    table.add_column("Excels At", ratio=1)
-    table.add_column("Struggles With", ratio=1)
+    table.add_column("Expert At", ratio=1)
+    table.add_column("Avoid For", ratio=1)
 
     for name, agent in agents.items():
-        good = ", ".join(agent.good_at)
-        poor = ", ".join(agent.poor_at)
+        good = ", ".join(agent.expert_in)
+        poor = ", ".join(agent.avoid_for)
         table.add_row(name, good, poor)
 
     console.print(table)
@@ -62,8 +62,8 @@ async def handle_agents_info(app: CompiledStateGraph, config, console, args):
     info_text = (
         f"[bold]Name:[/bold] {status['name']}\n"
         f"[bold]Class:[/bold] {status['class']}\n"
-        f"[bold]Good at:[/bold] {', '.join(status['good_at']) or 'None'}\n"
-        f"[bold]Poor at:[/bold] {', '.join(status['poor_at']) or 'None'}\n"
+        f"[bold]Expert at:[/bold] {', '.join(status['expert_in']) or 'None'}\n"
+        f"[bold]Avoid for:[/bold] {', '.join(status['avoid_for']) or 'None'}\n"
         f"[bold]Policy:[/bold] {status['llm_select_policy']}\n"
         f"[bold]LLMs:[/bold] {', '.join(status['llm_services']) or 'None'}\n"
         f"[bold]Tools:[/bold] {', '.join(status['tools']) or 'None'}\n"

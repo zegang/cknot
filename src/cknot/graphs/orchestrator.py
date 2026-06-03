@@ -6,7 +6,6 @@ from redis.asyncio import Redis as AsyncRedis
 from cknot.agents.boss import CKnotBossAgent
 from cknot.agents.code_fixer import CodeFixerAgent
 from cknot.agents.deep_search import DeepSearchAgent
-from cknot.agents.article_writer import ArticleWriterAgent
 from cknot.agents.log_parser import LogParserAgent
 from cknot.utils.llm_manager import LLMManager
 from langgraph.graph import StateGraph, END
@@ -54,20 +53,18 @@ class GraphOrchestrator:
         deep_search = DeepSearchAgent()
         log_parser = LogParserAgent()
         code_fixer = CodeFixerAgent()
-        article_writer = ArticleWriterAgent(tools=self.tools)
         boss = CKnotBossAgent(
             name="cknot", 
             llm_services=[def_llm_svc], 
             tools=self.tools, 
-            sub_agents=[deep_search, log_parser, code_fixer, article_writer]
+            sub_agents=[deep_search, log_parser, code_fixer]
         )
 
         self.agents = {
             boss.name: boss,
             deep_search.name: deep_search,
             log_parser.name: log_parser,
-            code_fixer.name: code_fixer,
-            article_writer.name: article_writer
+            code_fixer.name: code_fixer
         }
 
         for agent in self.agents.values():
@@ -79,13 +76,14 @@ class GraphOrchestrator:
         # Specifically look for the last message from the orchestrator (cknot)
         last_message = state["messages"][-1]
         
-        logger.debug(f'Agent Graph Node CKnot Routing Check: {last_message}')
+        logger.debug(f'CKnot Routing Agent Check: {last_message}')
         if getattr(last_message, "tool_calls", None):
             return "tools"
             
         content = last_message.content if last_message.content else ""
         # Match the new delegation format: "Agent [AgentName]"
         match = re.search(r'Agent\s+(\w+)', content, re.IGNORECASE)
+        logger.info(f"CKnot Routing, agent: {match}, found in, content: {content}")
         if match:
             return match.group(1)
 
@@ -105,31 +103,38 @@ class GraphOrchestrator:
 
         workflow = StateGraph(CknotAgentState, config_schema=CKnotConfig)
 
-        # Use agent names for node identifiers to match delegation triggers
-        boss_name = self.agents["cknot"].name
-        log_parser_name = self.agents["LogParserAgent"].name
-        code_fixer_name = self.agents["CodeFixerAgent"].name
-        deep_search_name = self.agents["DeepSearchAgent"].name
-        article_writer_name = self.agents["ArticleWriterAgent"].name
+        # Dynamically add all registered agents as nodes
+        all_agents = AgentRegistry.list_agents()
+        for name, agent in all_agents.items():
+            # Ensure plugin agents have access to system tools if they weren't
+            # initialized with any.
+            if not agent.tools and self.tools:
+                agent.tools = self.tools
 
-        # Define node functions using agent dynamic names
-        workflow.add_node(boss_name, self.agents[boss_name].ainvoke)
-        workflow.add_node(log_parser_name, self.agents[log_parser_name].ainvoke)
-        workflow.add_node(code_fixer_name, self.agents[code_fixer_name].ainvoke)
-        workflow.add_node(deep_search_name, self.agents[deep_search_name].ainvoke)
-        workflow.add_node(article_writer_name, self.agents[article_writer_name].get_subgraph())
+            # If agent provides a subgraph (like ArticleWriter), use it; otherwise use ainvoke
+            if hasattr(agent, 'get_subgraph'):
+                workflow.add_node(name, agent.get_subgraph())
+                # Subgraphs typically return to boss
+                workflow.add_edge(name, "cknot")
+            else:
+                workflow.add_node(name, agent.ainvoke)
+                
+                # Special routing for known patterns, otherwise default to Boss
+                if name == "LogParserAgent":
+                    workflow.add_edge(name, "CodeFixerAgent")
+                elif name == "CodeFixerAgent":
+                    workflow.add_edge(name, END)
+                elif name == "DeepSearchAgent":
+                    workflow.add_conditional_edges(name, self._search_router)
+                elif name != "cknot":
+                    workflow.add_edge(name, "cknot")
+
         workflow.add_node("tools", ToolNode(self.tools))
 
         # Define graph flow
-        workflow.set_entry_point(boss_name)
-        workflow.add_conditional_edges(boss_name, self._boss_router)
-        workflow.add_edge("tools", boss_name)
-        workflow.add_edge(log_parser_name, code_fixer_name)
-        workflow.add_edge(code_fixer_name, END)
-        workflow.add_conditional_edges(deep_search_name, self._search_router)
-        
-        # After the sub-graph finishes, it returns to the Boss for final delivery
-        workflow.add_edge(article_writer_name, boss_name)
+        workflow.set_entry_point("cknot")
+        workflow.add_conditional_edges("cknot", self._boss_router)
+        workflow.add_edge("tools", "cknot")
 
         # Initialize persistence
         if settings.CHECKPOINTER_TYPE == "redis":

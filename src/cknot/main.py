@@ -13,6 +13,7 @@ from cknot.utils.logging_config import setup_logging, user_id_ctx
 from cknot.utils.cleanup import delete_old_threads
 from cknot.graphs.orchestrator import create_graph
 from cknot.cli.cli import run_cli_loop
+from cknot.agents.registry import AgentRegistry
 from cknot.config.config import settings
 from rich.console import Console
 
@@ -61,6 +62,11 @@ async def main(): # Make main async
         default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "llms.json"),
         help="Path to JSON or YAML file containing LLM services to register on startup"
     )
+    parser.add_argument(
+        "--plugins",
+        type=str,
+        help="Directory containing third-party custom agents"
+    )
     args = parser.parse_args()
 
     if args.redis_port:
@@ -98,6 +104,11 @@ async def main(): # Make main async
         if args.llms_file:
             llm_manager = LLMManager(client)
             llm_manager.load_services_from_file(args.llms_file)
+
+    # Load third-party agents before the graph orchestrator builds the workflow
+    if args.plugins:
+        logger.info(f"Loading custom agents from {args.plugins}...")
+        AgentRegistry.load_custom_agents(args.plugins)
 
     if args.api:
         logger.info("Starting CKnot FastAPI server...")

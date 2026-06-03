@@ -32,6 +32,16 @@ class CKnotBaseAgent(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
+    @property
+    def good_at(self) -> List[str]:
+        """Alias for expert_in to maintain compatibility with CLI commands."""
+        return self.expert_in
+
+    @property
+    def poor_at(self) -> List[str]:
+        """Alias for avoid_for to maintain compatibility with CLI commands."""
+        return self.avoid_for
+
     def model_post_init(self, __context: Any) -> None:
         if not self.name:
             self.name = self.__class__.__name__
@@ -190,8 +200,14 @@ class CKnotBaseAgent(BaseModel):
         total_tokens = usage.get("total_tokens", 0) if usage else 0
         return {
             "messages": [response],
+            "agent_data": {
+                self.name: {
+                    "raw_output": response.content,
+                    "last_run": time.strftime("%Y-%m-%d %H:%M:%S")
+                }
+            },
             "progress_report": {
-                self.name.lower(): {
+                self.name: {
                     "step": "WORKING",
                     "description": f"{self.name} is working...",
                     "status": "done",

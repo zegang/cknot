@@ -1,1 +1,0 @@
-"""Centralized persona and system prompt definitions for cknot agents."""

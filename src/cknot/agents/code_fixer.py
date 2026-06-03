@@ -20,7 +20,8 @@ class CodeFixerAgent(CKnotBaseAgent):
 
     async def ainvoke(self, state: CknotAgentState, config: RunnableConfig) -> Dict[str, Any]:
         """Asynchronous execution for the code fixer."""
-        issues = state.get("parsed_issues")
+        # Now pulling specifically from the LogParser's namespace
+        issues = state.get("agent_data", {}).get("LogParserAgent", {}).get("issues")
         if not issues or "Error" in issues:
             return {"fix_result": "Cannot fix: No valid issues identified."}
 

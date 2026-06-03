@@ -25,6 +25,7 @@ async def handle_llms_list(app: CompiledStateGraph, config, console, args):
     table = Table(title="Registered LLM Services", border_style="cyan", header_style="bold cyan")
     table.add_column("ID", style="cyan")
     table.add_column("Provider")
+    table.add_column("Type")
     table.add_column("Model")
     table.add_column("Status", justify="center")
     table.add_column("Valid", justify="center")
@@ -34,7 +35,7 @@ async def handle_llms_list(app: CompiledStateGraph, config, console, args):
         status = "[bold green]ENABLED[/bold green]" if s.is_enabled else "[bold red]DISABLED[/bold red]"
         valid = "[bold green]✔[/bold green]" if s.is_valid else "[bold red]✘[/bold red]"
         usage = f"{s.total_input_tokens} / {s.total_output_tokens}"
-        table.add_row(s.id, s.provider.value, s.model_name, status, valid, usage)
+        table.add_row(s.id, s.provider.value, s.service_type.value, s.model_name, status, valid, usage)
 
     console.print(table)
 

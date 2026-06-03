@@ -383,10 +383,16 @@ class LLMManager:
                 logger.error(f"Invalid format in {file_path}. Expected a list of LLM configurations.")
                 return
 
+            success_count = 0
             for config_dict in configs_data:
-                config = LLMService(**config_dict)
-                self.register_llm_service(config)
+                try:
+                    config = LLMService(**config_dict)
+                    self.register_llm_service(config)
+                    success_count += 1
+                except Exception as e:
+                    service_id = config_dict.get("id", "unknown")
+                    logger.error(f"Failed to load LLM service '{service_id}' from {file_path}: {e}")
             
-            logger.info(f"Successfully registered {len(configs_data)} LLM services from {file_path}")
+            logger.info(f"Successfully registered {success_count} LLM services from {file_path}")
         except Exception as e:
             logger.error(f"Error loading LLM services from {file_path}: {e}")

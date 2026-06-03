@@ -24,6 +24,7 @@ function show_help {
     echo "  build    Build the containers using $COMPOSE_ENGINE"
     echo "  start    Start the API server in the background"
     echo "  cli      Start an interactive cknot CLI turn inside the container"
+    echo "  test     Run tests inside the container (e.g., ./bootstrap.sh test tests/test_article_writer_agent.py)"
     echo "  stop     Stop and remove containers"
     echo "  shell    Enter the app container's bash shell"
     echo "  redmods  List redis modules"
@@ -46,7 +47,12 @@ case "$1" in
         ;;
     cli)
         echo "Connecting to cknot CLI with $COMPOSE_ENGINE..."
-        $COMPOSE_CMD exec -it cknot-app uv run python -m cknot.main
+        $COMPOSE_CMD exec -it cknot-app uv run python -m cknot.main --plugins ./plugins/agents
+        ;;
+    test)
+        echo "Running tests with $COMPOSE_ENGINE..."
+        # We ensure PYTHONPATH includes 'plugins' so that dynamically loaded agents are testable
+        $COMPOSE_CMD exec -it cknot-app env PYTHONPATH=src:plugins uv run pytest "${@:2}"
         ;;
     stop)
         echo "Stopping containers with $COMPOSE_ENGINE..."

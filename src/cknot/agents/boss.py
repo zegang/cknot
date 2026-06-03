@@ -36,8 +36,9 @@ class CKnotBossAgent(CKnotBaseAgent):
     def _get_messages(self, state: CknotAgentState) -> List[BaseMessage]:
         """Overrides base to inject specialist capabilities into the Boss prompt."""
         team_manifest = "\n\nTEAM DIRECTORY & DELEGATION PROTOCOL:\n"
-        for agent in self.sub_agents:
-            name = agent.__class__.__name__
+        all_agents = AgentRegistry.list_agents()
+        for name, agent in all_agents.items():
+            if name == self.name: continue # Don't list self
             good = ", ".join(agent.expert_in) if agent.expert_in else "General tasks"
             poor = ", ".join(agent.avoid_for) if agent.avoid_for else "None specified"
             

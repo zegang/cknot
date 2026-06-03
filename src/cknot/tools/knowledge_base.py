@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Type, Any
+from typing import Type, Any, ClassVar
 from pydantic import BaseModel, Field, PrivateAttr
 from langchain_core.tools import BaseTool
 from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, StorageContext, load_index_from_storage
@@ -18,13 +18,13 @@ class LlamaIndexRetrieverTool(BaseTool):
     name: str = "knowledge_base"
     description: str = "Search through internal documentation and system manuals for specific technical answers."
     args_schema: Type[BaseModel] = KnowledgeBaseInput
-    default_source_path: str = "/app/ragsource"
-    default_store_path: str = "/app/ragstore"
+    default_source_path: ClassVar[str] = "/app/ragsource"
+    default_store_path: ClassVar[str] = "/app/ragstore"
     
     data_path: str = Field(default="/app/ragsource")
     storage_dir: str = Field(default="/app/ragstore")
     service_id: str = Field(default="default-llm")
-    embed_service_id: str = Field(default="default-embadding")
+    embed_service_id: str = Field(default="default-embedding")
     _index: Any = PrivateAttr()
 
     def __init__(
@@ -32,8 +32,9 @@ class LlamaIndexRetrieverTool(BaseTool):
         data_path: str = "/app/ragsource",
         storage_dir: str = "/app/ragstore",
         service_id: str = "default-llm",
-        embed_service_id: str = "default-embadding"
+        embed_service_id: str = "default-embedding"
     ):
+        logger.debug(f"Initing LlamaIndexRetrieverTool with {data_path=}, {storage_dir=}, {service_id=}, {embed_service_id=}")
         # Resolve relative paths using default source/store locations
         if not os.path.isabs(data_path) and not os.path.exists(data_path):
             # Only prepend default path if the file doesn't exist relative to CWD

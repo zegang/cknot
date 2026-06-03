@@ -19,6 +19,9 @@ from langgraph.prebuilt import ToolNode
 
 logger = logging.getLogger(__name__)
 
+# Context variable to manage task-local prompts across async execution nodes
+_current_prompt: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("article_writer_prompt", default=None)
+
 ARTICLE_WRITER_PROMPT = (
     "You are an Elite Content Strategist and Article Writer. You produce authoritative, long-form content.\n"
     "Your workflow MUST follow these stages:\n"
@@ -61,26 +64,15 @@ ARTICLE_SUMMARIZER_PROMPT = (
     "data points, and quotes for the drafter. Ensure no information is lost, but remove redundancies."
 )
 
-_current_prompt: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("article_writer_prompt", default=None)
-
-class ArticleWriterState(TypedDict):
-    """Specific state schema for the Article Writer sub-graph."""
-    messages: Annotated[List[BaseMessage], add_messages]
+class ArticleWriterState(CknotAgentState):
+    """
+    Specific state schema for the Article Writer sub-graph.
+    Inherits core fields and adds specialist-specific routing fields.
+    """
     topic: str
-    outline: str
-    # Dict of section names to retrieved facts. Uses ior (|) to merge results in Map-Reduce.
-    research_data: Annotated[Dict[str, str], operator.ior]
     draft: str
-    feedback: str
-    iteration_count: int
-    total_sections: int
-    output_file_path: Optional[str]
-    append_file: bool
-    is_save_only: bool
-    agent_summary: Annotated[Dict[str, Dict[str, Any]], operator.ior]
     source_paths: List[str]
-    source_material: str
-    progress_report: Annotated[Dict[str, Dict[str, Any]], operator.ior]
+    iteration_count: int
 
 class ArticleWriterAgent(CKnotBaseAgent):
     """
@@ -88,7 +80,11 @@ class ArticleWriterAgent(CKnotBaseAgent):
     Handles planning, research, drafting, editing, and refining.
     """
     system_prompt: str = Field(default=ARTICLE_WRITER_PROMPT)
-    expert_in: List[str] = Field(default_factory=lambda: ["aritcle paper or context summarization and writing", "long-form content", "detailed outlines", "editorial review", "saving articles to local files"])
+    expert_in: List[str] = Field(default_factory=lambda: ["article paper or context summarization and writing", 
+                                                          "context summarize", "article summarize",
+                                                          "context writing", "article writing",
+                                                          "long-form content", "detailed outlines",
+                                                          "editorial review", "saving articles to local files"])
     avoid_for: List[str] = Field(default_factory=lambda: ["code debugging", "system log analysis", "real-time chat support"])
     refine_counts: int = Field(default=1)
 
@@ -101,7 +97,8 @@ class ArticleWriterAgent(CKnotBaseAgent):
         prompt = _current_prompt.get() or self.system_prompt
         
         # Inject source material context if available
-        source_material = state.get("source_material")
+        # Now retrieving from namespaced data
+        source_material = state.get("agent_data", {}).get("analyst_source_material")
         if source_material:
             prompt += f"\n\n[LOCAL SOURCE CONTEXT]\n{source_material}\n[END SOURCE CONTEXT]"
 
@@ -197,12 +194,13 @@ class ArticleWriterAgent(CKnotBaseAgent):
             
             token = _current_prompt.set(ARTICLE_ANALYST_PROMPT)
             try:
-                # Initialize the LlamaIndex-based retriever tool with session-specific paths
+                # Initialize the LlamaIndex-based retriever tool.
+                # We use data_path to align with the tool's expected input parameter.
                 rag_tool = LlamaIndexRetrieverTool(data_path=source_path, storage_dir=storage_dir)
 
                 # Perform a targeted RAG query to extract relevant context for the topic
                 query = f"Analyze the source documents and extract all key facts, technical data, and relevant context to support writing an article about: {state['topic']}"
-                source_material = await rag_tool._arun(query)
+                source_material = await rag_tool.ainvoke(query)
 
                 # Use the LLM with the ARTICLE_ANALYST_PROMPT to refine and summarize the RAG output
                 inputs = {"messages": [HumanMessage(content=f"Topic: {state['topic']}\n\nRetrieved Context from Documents:\n{source_material}")]}
@@ -210,7 +208,9 @@ class ArticleWriterAgent(CKnotBaseAgent):
                 final_analysis = result["messages"][-1].content
 
                 return {
-                    "source_material": final_analysis,
+                    "agent_data": {
+                        "analyst_source_material": final_analysis
+                    },
                     "messages": result["messages"],
                     "progress_report": {
                         "analyst": {
@@ -223,7 +223,11 @@ class ArticleWriterAgent(CKnotBaseAgent):
                 }
             except Exception as e:
                 logger.error(f"RAG analysis failed: {e}")
-                return {"source_material": f"Error during RAG analysis: {str(e)}"}
+                return {
+                    "agent_data": {
+                        "analyst_source_material": f"Error during RAG analysis: {str(e)}"
+                    }
+                }
             finally:
                 _current_prompt.reset(token)
 

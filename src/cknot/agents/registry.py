@@ -1,5 +1,8 @@
 import logging
 import inspect
+import importlib.util
+import os
+import sys
 from typing import Dict, Type, Any, List, Optional, Union
 from cknot.agents.base import CKnotBaseAgent
 from cknot.schemas.llm_service import LLMService, LLMSelectPolicy
@@ -73,23 +76,50 @@ class AgentRegistry:
     @classmethod
     def get_all_capabilities(cls) -> Dict[str, Dict[str, List[str]]]:
         """
-        Returns a mapping of registered agent names to their 'good_at' and 'poor_at' capabilities.
+        Returns a mapping of registered agent names to their 'expert_in' and 'avoid_for' capabilities.
         """
         capabilities = {}
-        for name, agent_class in cls._agents.items():
+        for name, agent in cls._agents.items():
             try:
-                # We attempt a lightweight instantiation to access the metadata attributes.
-                # Since some agents (like CKnotBossAgent) require 'tools', we inspect the 
-                # signature to provide dummy arguments where necessary.
-                sig = inspect.signature(agent_class.__init__)
-                kwargs = {"tools": []} if "tools" in sig.parameters else {}
-                
-                dummy = agent_class(**kwargs)
                 capabilities[name] = {
-                    "expert_in": getattr(dummy, "expert_in", []),
-                    "avoid_for": getattr(dummy, "avoid_for", [])
+                    "expert_in": agent.expert_in,
+                    "avoid_for": agent.avoid_for
                 }
             except Exception as e:
                 logger.debug(f"Failed to retrieve capabilities for {name}: {e}")
-                capabilities[name] = {"good_at": [], "poor_at": []}
+                capabilities[name] = {"expert_in": [], "avoid_for": []}
         return capabilities
+
+    @classmethod
+    def load_custom_agents(cls, directory: str):
+        """Dynamically loads agents from a specific directory."""
+        if not os.path.exists(directory):
+            logger.warning(f"Plugin directory {directory} does not exist.")
+            return
+
+        for filename in os.listdir(directory):
+            if filename.endswith(".py") and not filename.startswith("__"):
+                module_name = filename[:-3]
+                file_path = os.path.join(directory, filename)
+                
+                try:
+                    spec = importlib.util.spec_from_file_location(module_name, file_path)
+                    if spec and spec.loader:
+                        module = importlib.util.module_from_spec(spec)
+                        sys.modules[module_name] = module
+                        spec.loader.exec_module(module)
+                        
+                        # Search for CKnotBaseAgent subclasses in the module
+                        for name, obj in inspect.getmembers(module):
+                            if (inspect.isclass(obj) and 
+                                issubclass(obj, CKnotBaseAgent) and 
+                                obj is not CKnotBaseAgent):
+                                
+                                # Instantiate and register
+                                try:
+                                    agent_instance = obj()
+                                    cls.register_agent(agent_instance)
+                                except Exception as e:
+                                    logger.error(f"Failed to instantiate agent {name}: {e}")
+                except Exception as e:
+                    logger.error(f"Failed to load plugin {filename}: {e}")

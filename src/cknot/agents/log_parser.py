@@ -27,7 +27,8 @@ class LogParserAgent(CKnotBaseAgent):
 
     async def ainvoke(self, state: CknotAgentState, config: RunnableConfig) -> Dict[str, Any]:
         """Asynchronous execution for the log parser."""
-        file_path = state.get("logs_file_path")
+        # Retrieve from shared data or config
+        file_path = state.get("agent_data", {}).get("cknot", {}).get("logs_file_path")
         if not file_path:
             return {"parsed_issues": "No log file path provided."}
         
@@ -40,5 +41,14 @@ class LogParserAgent(CKnotBaseAgent):
         ]
 
         result = await super().ainvoke(temp_state, config)
-        result["parsed_issues"] = result["messages"][-1].content
-        return result
+        
+        content = result["messages"][-1].content
+        return {
+            **result,
+            "agent_data": {
+                self.name: {
+                    "issues": content,
+                    "log_source": file_path
+                }
+            }
+        }

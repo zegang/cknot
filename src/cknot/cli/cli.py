@@ -50,6 +50,9 @@ _progress_total: Optional[int] = None
 _progress_completed: int = 0
 _current_percentage: float = 0.0
 _agent_progress_reports: Dict[str, Dict[str, Any]] = {}
+_current_agent: str = "cknot"
+_current_node: str = ""
+_current_namespace: List[str] = []
 
 def get_progress_renderable(agent_output: str = ""):
     """Generates the animated progress text with simulated interactive tabs for the bottom panel."""
@@ -87,20 +90,24 @@ def get_progress_renderable(agent_output: str = ""):
     progress_str = f" [{_progress_completed}/{_progress_total}]" if _progress_total else ""
     tab_line = " ".join(tab_elements)
 
-    # Build the progress overview from the structured reports
-    progress_details = []
-    if _agent_progress_reports:
-        for node_id, info in _agent_progress_reports.items():
-            desc = info.get("description", "Working...")
-            step = info.get("step", "TASK")
-            progress_details.append(f"[dim]•[/dim] [bold cyan]{step}[/bold cyan]: {desc}")
-    else:
-        progress_details.append(f"[bold magenta]{_current_status}[/bold magenta]{progress_str}")
+    # Build an ASCII tree representation of the current execution path
+    hierarchy = ["cknot"] + list(_current_namespace)
+    if _current_node and _current_node != hierarchy[-1]:
+        hierarchy.append(_current_node)
 
-    detail_text = "\n".join(progress_details[-3:]) # Show last 3 active progress lines
+    tree_lines = []
+    for i, step in enumerate(hierarchy):
+        indent = "  " * i
+        branch = "└── " if i > 0 else ""
+        if i == len(hierarchy) - 1:
+            status_info = f" [dim]({_current_status})[/dim]" if _current_status and _current_status != "Initializing..." else ""
+            tree_lines.append(f"{indent}{branch}[bold magenta]{step}[/bold magenta]{status_info}{progress_str}")
+        else:
+            tree_lines.append(f"{indent}{branch}[bold cyan]{step}[/bold cyan]")
+    detail_text = "\n".join(tree_lines)
 
     # 2. Process content
-    display_content = Markdown(agent_output) if agent_output.strip() else Text("Agent is processing...", style="dim")
+    display_content = Markdown(agent_output) if agent_output.strip() else Text("CKnot is processing...", style="dim")
 
     # Create the progress bar
     progress_bar = ProgressBar(total=100, completed=min(100, overall_pct), width=None)
@@ -204,13 +211,16 @@ async def dispatch_command(app: CompiledStateGraph, config, user_input: str):
 
 async def _run_interactive_turn(user_input: str, session_id: str, config: dict, app, live: Optional[Live] = None):
     """Handles a single turn of the interactive CLI, including streaming, interrupts, and UI updates."""
-    global _current_status, _progress_total, _progress_completed, _agent_progress_reports
+    global _current_status, _progress_total, _progress_completed, _agent_progress_reports, _current_agent, _current_node, _current_namespace
     
     # Initialize/Reset status for the new turn
     _current_status = "Initializing..."
     _progress_total = None
     _progress_completed = 0
     _current_percentage = 0.0
+    _current_agent = "cknot"
+    _current_node = "start"
+    _current_namespace = []
 
     # Update config with immutable context
     config["configurable"].update({
@@ -230,7 +240,12 @@ async def _run_interactive_turn(user_input: str, session_id: str, config: dict, 
         last_node = None
         try:
             async for namespace, chunk in app.astream(current_input, config, subgraphs=True):
+                # Update global agent tracking from namespace
+                _current_namespace = list(namespace)
+                _current_agent = namespace[-1] if namespace else "cknot"
+                
                 for node, state in chunk.items():
+                    _current_node = node
                     if node != last_node:
                         logger.info(f"Node Transition: {node}")
                         now = time.perf_counter()
@@ -289,17 +304,25 @@ async def _run_interactive_turn(user_input: str, session_id: str, config: dict, 
         if snapshot.next:
             # snapshot.next is a tuple representing the path to the next node(s)
             next_path = snapshot.next
-            next_node = next_path[0]
+            # The node we are interrupting at is the last one in the path if it's a subgraph
+            next_node = next_path[-1]
             execution_info = f"[bold yellow]{next_node}[/bold yellow]"
 
-            # If we are about to enter the tools node, extract the tool calls from the state
-            if next_node == "tools":
-                messages = snapshot.values.get("messages", [])
+            # Find the state that contains the tool calls (might be nested in subgraphs)
+            current_snapshot = snapshot
+            while current_snapshot.tasks and current_snapshot.tasks[0].state:
+                current_snapshot = current_snapshot.tasks[0].state
+
+            # If we are about to enter a tools node, extract the tool calls from the state
+            if "tools" in next_node:
+                messages = current_snapshot.values.get("messages", [])
                 last_msg = messages[-1] if messages else None
                 if last_msg and hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
                     tool_details = []
                     for tc in last_msg.tool_calls:
-                        tool_details.append(f"\n  * {tc['name']}({tc['args']})")
+                        # Format arguments as a string: key='value', key2=123
+                        args_str = ", ".join([f"{k}={repr(v)}" for k, v in tc.get('args', {}).items()])
+                        tool_details.append(f"\n  * [cyan]{tc['name']}[/cyan]({args_str})")
                     execution_info = f"tools: {''.join(tool_details)}"
 
             # Handle ArticleWriter sub-graph saver interrupt
@@ -352,7 +375,7 @@ async def run_cli_loop(app: CompiledStateGraph, config, session_id: str):
         try:
             console.print(Rule(style="dim magenta"))
             with patch_stdout():
-                user_input = await session.prompt_async(HTML('<ansigreen><b>You &gt; </b></ansigreen>'))
+                user_input = await session.prompt_async(HTML('<ansigreen><b>&gt; </b></ansigreen>'))
                 user_input = (user_input or "").strip()
         except KeyboardInterrupt:
             break

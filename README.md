@@ -34,7 +34,12 @@
     ./bootstrap.sh start
     ```
 
-4.  **Enter the Interactive CLI**:
+4.  **Tests inside container**:
+    ```bash
+    ./bootstrap.sh tests
+    ```
+
+5.  **Enter the Interactive CLI**: Agent plugin "plugins/agent/ArticleWriterAgent.py" registed automatically
     ```bash
     ./bootstrap.sh cli
     ```
@@ -50,44 +55,48 @@ The interactive CLI supports a hierarchical command system. Type `/help` inside 
  | |___| . \ | |\  | |_| || |  
   \____|_|\_\|_| \_|\___/ |_|  
 version 0.0.1-alpha
-
 ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-cknot Interactive CLI (Session: cli_session_1779982985)
+cknot Interactive CLI (Session: cli_session_1780502068)
 Type /exit or /quit to end the session.
 
+ > /llms                                   
+                                      Registered LLM Services                                       
+┏━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━━━━━━┓
+┃ ID                ┃ Provider ┃ Type      ┃ Model              ┃ Status  ┃ Valid ┃ Usage (In/Out) ┃
+┡━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━━━━━━┩
+│ default-embedding │ ollama   │ embedding │ all-minilm         │ ENABLED │   ✔   │          0 / 0 │
+│ local-vllm        │ vllm     │ chat      │ Qwen/Qwen3-0.6B    │ ENABLED │   ✔   │          0 / 0 │
+│ default-llm       │ ollama   │ chat      │ my-qwen-3.6:latest │ ENABLED │   ✔   │          0 / 0 │
+└───────────────────┴──────────┴───────────┴────────────────────┴─────────┴───────┴────────────────┘
+ > /agents                                                 
+                                                      Agent Registry                               
+┏━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Agent ID           ┃ Expert At                                        ┃ Avoid For                                       ┃
+┡━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ ArticleWriterAgent │ article paper or context summarization and       │ code debugging, system log analysis, real-time  │
+│                    │ writing, context summarize, article summarize,   │ chat support                                    │
+│                    │ context writing, article writing, long-form      │                                                 │
+│                    │ content, detailed outlines, editorial review,    │                                                 │
+│                    │ saving articles to local files                   │                                                 │
+│ cknot              │                                                  │                                                 │
+│ DeepSearchAgent    │ deep internet research, web searching, latest    │ local file access, private database analysis,   │
+│                    │ news, public data                                │ code execution                                  │
+│ LogParserAgent     │ log analysis, root cause identification, DevOps  │ writing code, web search, user interaction      │
+│                    │ debugging, container logs                        │                                                 │
+│ CodeFixerAgent     │ code fixing, patching, software engineering,     │ log parsing, web search, internet research      │
+│                    │ refactoring                                      │                                                 │
+└────────────────────┴──────────────────────────────────────────────────┴─────────────────────────────────────────────────┘
 ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-You > /agents
-───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-───────────────────────────────────────────────── Active Agents in Graph ──────────────────────────────────────────────────
-- cknot        LLM: default-llm (default) → Boss Orchestrator
-- log_parser   LLM: default-llm (default) → Log Analysis Specialist
-- code_fixer   LLM: default-llm (default) → Remediation specialist
-- deep_search  LLM: default-llm (default) → Deep Research & Analysis
-- tools        LLM: default-llm (default) → Tool Execution Engine
-───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-You > /llms
-───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-                             Registered LLM Services                              
-┏━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━━━━━━┓
-┃ ID          ┃ Provider ┃ Model              ┃ Status  ┃ Valid ┃ Usage (In/Out) ┃
-┡━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━━━━━━┩
-│ local-vllm  │ vllm     │ Qwen/Qwen3-0.6B    │ ENABLED │   ✔   │          0 / 0 │
-│ default-llm │ ollama   │ my-qwen-3.6:latest │ ENABLED │   ✔   │    2449 / 2028 │
-└─────────────┴──────────┴────────────────────┴─────────┴───────┴────────────────┘
-───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-You > /llms
-             list    Lists all registered LLM services and their health status.  
-             add     Interactively registers a new LLM service.
-             rm      Removes an LLM service by ID.               
-             test    Runs a connectivity check for an LLM service.
-             load    Loads LLM services from a JSON or YAML file.
-             enable  Enables an LLM service.   
+> /agents
+           list   Lists all registered agents and their specialized capabilities.       
+           info   Shows detailed metadata for a specific agent. Usage: info <agent_id>  
+           rm     Unregisters an agent from the system. Usage: rm <agent_id>            
+           llm    Manage agent LLM assignments. Subcommands: set                        
 ```
-![Web Search](./docs/images/websearch2026-05-31%2022-51-36.png)
 
 ### Article Writer Agent & Token Cost Estimation
-![Article Writer Agent & Token Cost Estimation](./docs/images/articlewriteragenttokencost.png)
+[![Plugin Article Writer Agent & Token Cost Estimation](./docs/images/articlewriter-agenttokencost.png)](./docs/images/articlewriter-agenttokencost.png)
+
 
 ## 🛡 Security & Reliability
 
@@ -106,8 +115,8 @@ You > /llms
 
 4. Audit Infrastructure: Expand the llms, tools, and users sections to review current system configurations, check token usage, or manage user profiles.
 
-![Swagger UI APIs](./docs/images/swaggeruiapis.png)
-![Agents List API](./docs/images/agentslistapi.png)
+[![Swagger UI APIs](./docs/images/swaggeruiapis.png)](./docs/images/swaggeruiapis.png)
+[![Agents List API](./docs/images/agentslistapi.png)](./docs/images/agentslistapi.png)
 
 ---
 *Developed with passion for robust agentic orchestration.*

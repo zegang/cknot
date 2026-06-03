@@ -1,8 +1,17 @@
 import pytest
 import re
+import sys
+import os
 from typing import Dict, Any
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-from cknot.agents.article_writer import ArticleWriterAgent, ArticleWriterState
+
+# Inject the plugins directory into sys.path so the agent can be imported for testing
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+plugins_path = os.path.join(project_root, "plugins")
+if plugins_path not in sys.path:
+    sys.path.insert(0, plugins_path)
+
+from agents.article_writer import ArticleWriterAgent, ArticleWriterState
 
 @pytest.fixture
 def agent():
@@ -13,7 +22,7 @@ def agent():
 def test_article_writer_metadata(agent):
     """Verify the agent identifies itself and its capabilities correctly."""
     assert agent.name == "ArticleWriterAgent"
-    assert "complex article writing" in agent.expert_in
+    assert "article paper or context summarization and writing" in agent.expert_in
     assert "long-form content" in agent.expert_in
     assert "code debugging" in agent.avoid_for
 
@@ -65,7 +74,9 @@ async def test_get_messages_context_injection(agent):
     """Verify that source material (RAG) context is correctly injected into the system prompt."""
     state = {
         "messages": [HumanMessage(content="Write an article")],
-        "source_material": "Context extracted from local PDF papers."
+        "agent_data": {
+            "analyst_source_material": "Context extracted from local PDF papers."
+        }
     }
     messages = agent._get_messages(state)
     
