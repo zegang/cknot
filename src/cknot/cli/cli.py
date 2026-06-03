@@ -1,28 +1,31 @@
 import asyncio
+import sys
 import time
 import re
 import logging
-from typing import Optional
+from typing import Optional, List, Any, Dict
 from cknot.utils.logging_config import user_id_ctx
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.formatted_text import HTML
-from prompt_toolkit.styles import Style
-from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.patch_stdout import patch_stdout
+from prompt_toolkit.key_binding import KeyBindings
 from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.graph.state import CompiledStateGraph
 from rich.console import Console, Group
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, MofNCompleteColumn
+from rich.text import Text
 from rich.markdown import Markdown
+from rich.table import Table
 from rich.rule import Rule
 from rich.panel import Panel
 from rich.live import Live
+from .utils import clear_lines
 from rich.prompt import Confirm
 from .commands import COMMAND_REGISTRY
 
 logger = logging.getLogger(__name__)
-console = Console()
+# Force terminal capabilities to prevent ANSI mangling through the patch_stdout proxy
+console = Console(force_terminal=True, color_system="auto", legacy_windows=False)
 
 CKNOT_LOGO = r"""
 [bold magenta]   ____ _  __ _   _  ___ _____ [/bold magenta]
@@ -42,7 +45,39 @@ _confirmation_result: Optional[str] = None
 _current_status: str = ""
 _progress_total: Optional[int] = None
 _progress_completed: int = 0
-_last_output_line: str = ""
+
+def get_progress_renderable(agent_output: str = ""):
+    """Generates the animated progress text with simulated interactive tabs for the bottom panel."""
+    frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    frame = frames[int(time.time() * 10) % len(frames)]
+    
+    stages = ["TRIAGE", "PLANNING", "RESEARCH", "WRITING", "SAVING"]
+    status_lower = _current_status.lower()
+    tab_elements = []
+    
+    for s in stages:
+        is_active = False
+        if s == "TRIAGE" and ("cknot" in status_lower or "initializing" in status_lower): is_active = True
+        elif s == "PLANNING" and "plann" in status_lower: is_active = True
+        elif s == "RESEARCH" and ("search" in status_lower or "research" in status_lower): is_active = True
+        elif s == "WRITING" and ("writer" in status_lower or "draft" in status_lower or "refin" in status_lower or "edit" in status_lower): is_active = True
+        elif s == "SAVING" and "sav" in status_lower: is_active = True
+        
+        style = "reverse bold magenta" if is_active else "dim"
+        tab_elements.append(f"[{style}] {s} [/{style}]")
+
+    progress_str = f" [{_progress_completed}/{_progress_total}]" if _progress_total else ""
+    tab_line = " ".join(tab_elements)
+
+    # Create the accumulating response display
+    response_display = Markdown(agent_output) if agent_output.strip() else Text("Agent is processing...", style="dim")
+
+    return Group(
+        Rule(style="dim cyan"),
+        Panel(response_display, title="[bold cyan]Agent Output[/bold cyan]", border_style="dim cyan", padding=(1, 2)),
+        Text.from_markup(f"{tab_line}  {frame} [bold magenta]{_current_status}[/bold magenta]{progress_str}"),
+        Rule(style="dim magenta")
+    )
 
 class CKnotCompleter(Completer):
     """Custom completer for hierarchical slash commands."""
@@ -70,24 +105,26 @@ class CKnotCompleter(Completer):
             prefix = parts[:-1]
             
             if not prefix:
-                # Root level completions (e.g., /llms, /agents)
                 for cmd_name, node in COMMAND_REGISTRY.commands.items():
                     if cmd_name.startswith(last_part):
                         yield Completion(cmd_name, start_position=-len(last_part), display_meta=node.help_text.split('\n')[0])
             else:
-                # Subcommand completions
                 parent = find_node(prefix)
                 if parent:
                     for sub_name, node in parent.subcommands.items():
                         if sub_name.startswith(last_part):
                             yield Completion(sub_name, start_position=-len(last_part), display_meta=node.help_text.split('\n')[0])
         elif has_space:
-            # Show all subcommands of the current node after a space
             target = find_node(parts)
             if target:
                 for sub_name, node in target.subcommands.items():
                     yield Completion(sub_name, start_position=0, display_meta=node.help_text.split('\n')[0])
 
+async def async_confirm(prompt: str, default: bool = True) -> bool:
+    """Non-blocking confirmation prompt using Rich inside an async context."""
+    # We use to_thread to keep the event loop running for background agents
+    # while waiting for the user to answer the confirmation.
+    return await asyncio.to_thread(Confirm.ask, prompt, default=default, console=console)
 
 async def dispatch_command(app: CompiledStateGraph, config, user_input: str):
     """Parses input and traverses the command tree to execute the right handler."""
@@ -97,7 +134,7 @@ async def dispatch_command(app: CompiledStateGraph, config, user_input: str):
 
     cmd_name = parts[0].lower()
     if cmd_name not in COMMAND_REGISTRY.commands:
-        console.print(f"[bold red]Unknown command: {cmd_name}. Type /help for assistance.[/bold red]")
+        print(f"Unknown command: {cmd_name}. Type /help for assistance.")
         return
 
     current_node = COMMAND_REGISTRY.commands[cmd_name]
@@ -118,24 +155,22 @@ async def dispatch_command(app: CompiledStateGraph, config, user_input: str):
 
     # Handle automatic help
     if args and args[0].lower() == "help":
-        console.print(Panel(current_node.get_usage(), title=f"Help: {current_node.name}", border_style="cyan"))
+        print(f"\n--- Help: {current_node.name} ---\n{current_node.get_usage()}\n")
         return
 
     if current_node.func:
         await current_node.func(app, config, console, args)
     else:
-        # If node has no func, it's a category; show help for subcommands
-        console.print(Panel(current_node.get_usage(), title=f"Usage: {current_node.name}", border_style="yellow"))
+        print(f"\n--- Usage: {current_node.name} ---\n{current_node.get_usage()}\n")
 
-async def _run_interactive_turn(user_input: str, session_id: str, config: dict, app):
+async def _run_interactive_turn(user_input: str, session_id: str, config: dict, app, live: Optional[Live] = None):
     """Handles a single turn of the interactive CLI, including streaming, interrupts, and UI updates."""
-    global _current_status, _progress_total, _progress_completed, _last_output_line
+    global _current_status, _progress_total, _progress_completed
     
     # Initialize/Reset status for the new turn
     _current_status = "Initializing..."
     _progress_total = None
     _progress_completed = 0
-    _last_output_line = ""
 
     # Update config with immutable context
     config["configurable"].update({
@@ -148,16 +183,15 @@ async def _run_interactive_turn(user_input: str, session_id: str, config: dict, 
         "messages": [HumanMessage(content=user_input)]
     }
 
-    # Internal loop to handle potential interrupts within a single user turn
+    agent_response_buffer = ""
+
     while True:
-        response_buffer = "" # Buffer for accumulating LLM responses
         step_start_time = time.perf_counter()
         last_node = None
-        streaming_active = False
-        # Local console instance to pick up the patched sys.stdout proxy 
-        # while the main loop is waiting for prompt input.
-        # console = Console(force_terminal=True)
         try:
+            if live:
+                live.update(get_progress_renderable(agent_response_buffer), refresh=True)
+                
             async for namespace, chunk in app.astream(current_input, config, subgraphs=True):
                 for node, state in chunk.items():
                     logger.info(f"Node Transition: {node}")
@@ -178,44 +212,30 @@ async def _run_interactive_turn(user_input: str, session_id: str, config: dict, 
                     else:
                         _progress_total = None
                     
-                    step_start_time = now
-
                     if "messages" in state and state["messages"]:
                         msg = state["messages"][-1]
                         if isinstance(msg, AIMessage) and msg.content:
-                            # Clean output: remove internal triggers from the LLM
+                            # Clean output: remove internal triggers and mangled escape hallucinations
                             display_text = re.sub(r'TRIGGER_[A-Z_]+', '', msg.content)
-                            # Remove mangled ANSI escape sequences often hallucinated by local models
-                            # display_text = re.sub(r'(?:\x1b|\\x1b|\?|\\033|u001b)\[[0-9;]*[mK]', '', display_text)
-                            
-                            # Update the fixed panel's "last output" tracker
-                            clean_content = display_text.strip()
-                            if clean_content:
-                                _last_output_line = clean_content.split('\n')[-1]
+                            # Also clean mangled ANSI if they appear
+                            display_text = re.sub(r'(?:\\x1b|\\033|u001b|\?)\[[0-9;]*[mK]', '', display_text)
+
+                            # Accumulate content for the live panel
+                            agent_response_buffer += display_text
 
                             if node != last_node:
-                                if streaming_active:
-                                    console.print()
-                                    streaming_active = False
-                                if node != "cknot":
-                                    console.print(Rule(f"Agent {node}", style="bold cyan"))
                                 last_node = node
-                            
-                            if not display_text.strip() and not msg.content.strip():
-                                continue
-
-                            # Stream deltas for the Boss (cknot), render Markdown for completed specialist reports
-                            if node == "cknot":
-                                console.print(display_text, end="")
-                                streaming_active = True
-                            else:
-                                console.print(Markdown(display_text))
                         
                         if hasattr(msg, "tool_calls") and msg.tool_calls:
-                            # Tool calls are logged, but we ensure prompt is restored correctly
                             pass
-            if streaming_active:
-                console.print()
+                        
+                        if live:
+                            live.update(get_progress_renderable(agent_response_buffer), refresh=True)
+                    
+                    step_start_time = now
+
+            if agent_response_buffer:
+                console.print(Markdown(agent_response_buffer))
 
         except asyncio.CancelledError:
             return
@@ -238,38 +258,28 @@ async def _run_interactive_turn(user_input: str, session_id: str, config: dict, 
                 if last_msg and hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
                     tool_details = []
                     for tc in last_msg.tool_calls:
-                        tool_details.append(f"\n  • [cyan]{tc['name']}[/cyan]([italic]{tc['args']}[/italic])")
+                        tool_details.append(f"\n  * {tc['name']}({tc['args']})")
                     execution_info = f"tools: {''.join(tool_details)}"
 
             # Handle ArticleWriter sub-graph saver interrupt
             elif next_node == "article_writer" and "saver" in next_path:
                 path = snapshot.values.get("output_file_path")
                 draft = snapshot.values.get("draft")
-                append_file = snapshot.values.get("append_file", False)
-                mode = "[bold red]Append[/bold red]" if append_file else "[bold green]Overwrite[/bold green]"
-
+                mode = "Append" if snapshot.values.get("append_file", False) else "Overwrite"
                 if path:
-                    execution_info = f"[bold cyan]article_writer:saver[/bold cyan]"
-                    execution_info += f"\n  • [cyan]File Path:[/cyan] [italic]{path}[/italic]"
-                    execution_info += f"\n  • [cyan]Mode:[/cyan] {mode}"
-                    if draft:
-                        execution_info += f"\n  • [cyan]Size:[/cyan] {len(draft.encode('utf-8'))} bytes"
-                        execution_info += f"\n  • [cyan]Word Count:[/cyan] {len(draft.split())} words"
+                    execution_info = f"article_writer:saver\n  * File Path: {path}\n  * Mode: {mode}"
 
-            console.print(Panel(
-                f"The agent is requesting to execute: {execution_info}",
-                title="[bold yellow]Action Required[/bold yellow]",
-                border_style="yellow"
-            ))
+            console.print(f"\nACTION REQUIRED: The agent is requesting to execute: {execution_info}")
             
             _current_status = "Awaiting authorization..."
             
-            # Wait for user to provide /yes or /no via the main loop
-            _confirmation_event.clear()
-            await _confirmation_event.wait()
-            res = _confirmation_result
-            
-            if res == "yes":
+            # Stop Live display temporarily so the confirmation prompt doesn't conflict with background refreshes
+            if live and live.is_started:
+                live.stop()
+
+            if await async_confirm(f"Allow [bold yellow]{next_node}[/bold yellow] to proceed?", default=True):
+                if live and not live.is_started:
+                    live.start()
                 current_input = None  # Passing None resumes from the checkpoint
                 continue
             else:
@@ -282,48 +292,14 @@ async def run_cli_loop(app: CompiledStateGraph, config, session_id: str):
     """Starts the interactive CLI conversation loop."""
     console.print(CKNOT_LOGO)
     console.print(Rule(style="bold magenta"))
-    console.print(f"[bold magenta]cknot Interactive CLI[/bold magenta] (Session: [cyan]{session_id}[/cyan])")
-    console.print("Type [italic]/exit[/italic] or [italic]/quit[/italic] to end the session.\n")
+    console.print(f"cknot Interactive CLI (Session: [cyan]{session_id}[/cyan])")
+    console.print("Type /exit or /quit to end the session.\n")
 
-    # Custom bindings to handle ESC as an interrupt
     kb = KeyBindings()
-
     @kb.add('escape')
-    def _(event):
-        """Handle ESC as a KeyboardInterrupt."""
-        event.app.exit(exception=KeyboardInterrupt)
+    def _(event): event.app.exit(exception=KeyboardInterrupt)
 
     session = PromptSession(completer=CKnotCompleter(), complete_while_typing=True, key_bindings=kb)
-
-    async def toolbar_refresher():
-        """Background task to ensure the toolbar spinner animates smoothly."""
-        while True:
-            if _active_task and not _active_task.done():
-                session.app.invalidate()
-            await asyncio.sleep(0.1)
-
-    asyncio.create_task(toolbar_refresher())
-
-    def get_toolbar():
-        """Renders the current agent status in the CLI toolbar."""
-        if not _active_task or _active_task.done():
-            return None
-        
-        # Spinner frames
-        frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-        frame = frames[int(time.time() * 10) % len(frames)]
-
-        # Build multi-line status panel
-        progress_str = f" [{_progress_completed}/{_progress_total}]" if _progress_total else ""
-
-        # Line 1: Activity Spinner & Status
-        line1 = f"<b>{frame} {_current_status}{progress_str}</b>"
-        # Line 2: The latest output from the agent (Fixed Panel feel)
-        line2 = f"<ansigray>   └─ Last: {_last_output_line[:60]}...</ansigray>" if _last_output_line else ""
-        
-        return HTML(
-            f'<ansimagenta>{line1}\n{line2}</ansimagenta>'
-        )
 
     global _active_task, _confirmation_result
 
@@ -331,21 +307,23 @@ async def run_cli_loop(app: CompiledStateGraph, config, session_id: str):
         try:
             console.print(Rule(style="dim magenta"))
             with patch_stdout():
-                user_input = await session.prompt_async(
-                    HTML('<ansigreen><b>You &gt; </b></ansigreen>'),
-                    bottom_toolbar=get_toolbar
-                )
-            user_input = user_input.strip()
-            console.print(Rule(style="dim magenta"))
+                user_input = await session.prompt_async(HTML('<ansigreen><b>You &gt; </b></ansigreen>'))
+                user_input = (user_input or "").strip()
         except KeyboardInterrupt:
-            if Confirm.ask("\n[bold red]Exit CKnot?[/bold red]", default=False):
-                break
-            continue
+            break
         except EOFError:
             break
+        else:
+            if user_input:
+                # Re-render input with top and bottom lines for clean isolation.
+                # Doing this inside patch_stdout prevents background tasks from injecting lines mid-clear.
+                clear_lines(2)
+                input_bar = Table.grid(expand=True)
+                input_bar.add_row(f" [bold green]> [/bold green]{user_input}", style="on black")
+                console.print(input_bar)
 
         if user_input.lower() in ["/exit", "/quit"]:
-            console.print("Goodbye from CKnot!")
+            print("Goodbye from CKnot!")
             break
         
         if not user_input:
@@ -356,16 +334,16 @@ async def run_cli_loop(app: CompiledStateGraph, config, session_id: str):
         if cmd == "/abort":
             if _active_task and not _active_task.done():
                 _active_task.cancel()
-                console.print("[bold red]Task aborted by user.[/bold red]")
+                print("Task aborted by user.")
             else:
-                console.print("[dim]No active task to abort.[/dim]")
+                print("No active task to abort.")
             continue
         elif cmd in ["/yes", "/no"]:
             if _active_task and not _active_task.done():
                 _confirmation_result = "yes" if cmd == "/yes" else "no"
                 _confirmation_event.set()
             else:
-                console.print("[dim]No pending authorization request.[/dim]")
+                print("No pending authorization request.")
             continue
 
         # Dispatch other Slash Commands
@@ -375,25 +353,33 @@ async def run_cli_loop(app: CompiledStateGraph, config, session_id: str):
 
         # Handle New Tasks
         if _active_task and not _active_task.done():
-            console.print("[bold yellow]⚠ An agent task is already running.[/bold yellow]")
-            console.print("Use [bold]/abort[/bold] to stop it, or [bold]/yes[/bold]/[bold]/no[/bold] if it's awaiting approval.")
+            print("! An agent task is already running.")
+            print("Use /abort to stop it, or /yes /no if it's awaiting approval.")
             continue
 
         # Start new turn in the background
+        # Set auto_refresh=False to disable the background refresh thread. 
+        # We will manually update the display in _run_interactive_turn using refresh=True.
+        live = Live(get_progress_renderable(""), console=console, auto_refresh=False, transient=True)
+        live.start()
+
         def _task_done_callback(fut):
             global _active_task
             _active_task = None
+            if live and live.is_started:
+                live.stop()
             if not fut.cancelled() and fut.exception():
                 logger.error(f"Task failed: {fut.exception()}")
 
         async def _run_with_context():
             token = user_id_ctx.set("cli_user")
             try:
-                await _run_interactive_turn(user_input, session_id, config, app)
+                await _run_interactive_turn(user_input, session_id, config, app, live=live)
             finally:
+                if live and live.is_started:
+                    live.stop()
                 user_id_ctx.reset(token)
 
-        _active_task = asyncio.create_task(
-            _run_with_context()
-        )
+        _active_task = asyncio.create_task(_run_with_context())
         _active_task.add_done_callback(_task_done_callback)
+        await _active_task
